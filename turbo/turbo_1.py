@@ -28,6 +28,7 @@ class Turbo1:
     Parameters
     ----------
     f : function handle
+    cs : constraint functions
     lb : Lower variable bounds, numpy.array, shape (d,).
     ub : Upper variable bounds, numpy.array, shape (d,).
     n_init : Number of initial points (2*dim is recommended), int.
@@ -42,7 +43,7 @@ class Turbo1:
     dtype : Dtype to use for GP fitting ("float32" or "float64")
 
     Example usage:
-        turbo1 = Turbo1(f=f, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals)
+        turbo1 = Turbo1(f=f, cs=cs, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals)
         turbo1.optimize()  # Run optimization
         X, fX = turbo1.X, turbo1.fX  # Evaluated points
     """
@@ -50,6 +51,7 @@ class Turbo1:
     def __init__(
         self,
         f,
+        cs,
         lb,
         ub,
         n_init,
@@ -82,6 +84,7 @@ class Turbo1:
 
         # Save function information
         self.f = f
+        self.cs = cs
         self.dim = len(lb)
         self.lb = lb
         self.ub = ub
@@ -245,16 +248,16 @@ class Turbo1:
             self._restart()
 
             # Generate and evalute initial design points
-            X_init = latin_hypercube(self.n_init, self.dim)
-            X_init = from_unit_cube(X_init, self.lb, self.ub)
-            fX_init = np.array([[self.f(x)] for x in X_init])
+            X_init = latin_hypercube(self.n_init, self.dim) # sample n_init x dim points using LHS, gives values in [0,1]
+            X_init = from_unit_cube(X_init, self.lb, self.ub) # normalize samples from [0,1] into [lb, ub]
+            fX_init = np.array([[self.f(x)] for x in X_init]) # evaluate samples with objective f
 
             # Update budget and set as initial data for this TR
             self.n_evals += self.n_init
-            self._X = deepcopy(X_init)
-            self._fX = deepcopy(fX_init)
+            self._X = deepcopy(X_init) # these are the actual X and fX
+            self._fX = deepcopy(fX_init) # for the iteration
 
-            # Append data to the global history
+            # Append data to the GLOBAL HISTORY
             self.X = np.vstack((self.X, deepcopy(X_init)))
             self.fX = np.vstack((self.fX, deepcopy(fX_init)))
 
