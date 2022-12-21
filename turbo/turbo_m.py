@@ -51,6 +51,7 @@ class TurboM(Turbo1):
     def __init__(
         self,
         f,
+        cs,
         lb,
         ub,
         n_init,
@@ -68,6 +69,7 @@ class TurboM(Turbo1):
         self.n_trust_regions = n_trust_regions
         super().__init__(
             f=f,
+            cs=cs,
             lb=lb,
             ub=ub,
             n_init=n_init,
