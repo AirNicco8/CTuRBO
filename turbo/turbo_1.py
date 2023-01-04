@@ -106,11 +106,11 @@ class Turbo1:
 
         # Tolerances and counters
         self.n_cand = min(100 * self.dim, 5000)
-        self.failtol = np.ceil(np.max([4.0 / batch_size, self.dim / batch_size]))
-        self.succtol = 3
+        self.failtol = np.ceil(np.max([4.0 / batch_size, self.dim / batch_size])) # number of fails to halve L
+        self.succtol = 3 # number of successes to double L
         self.n_evals = 0
 
-        # Trust region sizes
+        # Trust region sizes (hypers)
         self.length_min = 0.5 ** 7
         self.length_max = 1.6
         self.length_init = 0.8
@@ -174,14 +174,16 @@ class Turbo1:
             X_torch = torch.tensor(X).to(device=device, dtype=dtype)
             y_torch = torch.tensor(fX).to(device=device, dtype=dtype)
             gp = train_gp(
-                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, hypers=hypers
+                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, hypers=hypers # surrogate GP
             )
 
             # Save state dict
             hypers = gp.state_dict()
 
         # Create the trust region boundaries
-        x_center = X[fX.argmin().item(), :][None, :]
+        x_center = X[fX.argmin().item(), :][None, :] # best solution found so far
+        # ndim coordinates
+
         weights = gp.covar_module.base_kernel.lengthscale.cpu().detach().numpy().ravel()
         weights = weights / weights.mean()  # This will make the next line more stable
         weights = weights / np.prod(np.power(weights, 1.0 / len(weights)))  # We now have weights.prod() = 1
@@ -196,12 +198,14 @@ class Turbo1:
 
         # Create a perturbation mask
         prob_perturb = min(20.0 / self.dim, 1.0)
+        # total perturbation if function has less than 21 dimension input
         mask = np.random.rand(self.n_cand, self.dim) <= prob_perturb
         ind = np.where(np.sum(mask, axis=1) == 0)[0]
         mask[ind, np.random.randint(0, self.dim - 1, size=len(ind))] = 1
 
         # Create candidate points
         X_cand = x_center.copy() * np.ones((self.n_cand, self.dim))
+        # add perturbation
         X_cand[mask] = pert[mask]
 
         # Figure out what device we are running on
@@ -216,7 +220,13 @@ class Turbo1:
         # We use Lanczos for sampling if we have enough data
         with torch.no_grad(), gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
             X_cand_torch = torch.tensor(X_cand).to(device=device, dtype=dtype)
+            # X_cand shape is n_cand(dim*100) x dim
+
+            # Thompson Sampling (TS)
             y_cand = gp.likelihood(gp(X_cand_torch)).sample(torch.Size([self.batch_size])).t().cpu().detach().numpy()
+            # realization drawn from posterior = (gp/prior -> likelihood), the number of realizations is the same as the batch_size
+            # sample a possible realization/function which is consistent with X_cand datapoints
+            # y_cand shape is n_cand(dim*100) x batch_size, every value is a possible function output for a candidate X
 
         # Remove the torch variables
         del X_torch, y_torch, X_cand_torch, gp
@@ -231,8 +241,8 @@ class Turbo1:
         X_next = np.ones((self.batch_size, self.dim))
         for i in range(self.batch_size):
             # Pick the best point and make sure we never pick it again
-            indbest = np.argmin(y_cand[:, i])
-            X_next[i, :] = deepcopy(X_cand[indbest, :])
+            indbest = np.argmin(y_cand[:, i]) # pick the best value for each element of the batch (n_cand array)
+            X_next[i, :] = deepcopy(X_cand[indbest, :]) # the related input X is the next value
             y_cand[indbest, :] = np.inf
         return X_next
 
@@ -274,11 +284,13 @@ class Turbo1:
                 # Standardize values
                 fX = deepcopy(self._fX).ravel()
 
-                # Create th next batch
+                # Create the next batch
                 X_cand, y_cand, _ = self._create_candidates(
                     X, fX, length=self.length, n_training_steps=self.n_training_steps, hypers={}
                 )
-                X_next = self._select_candidates(X_cand, y_cand)
+
+                X_next = self._select_candidates(X_cand, y_cand) 
+                # here we have a single (batch) point which is the next point to evaluate
 
                 # Undo the warping
                 X_next = from_unit_cube(X_next, self.lb, self.ub)
@@ -291,8 +303,10 @@ class Turbo1:
 
                 # Update budget and append data
                 self.n_evals += self.batch_size
+
                 self._X = np.vstack((self._X, X_next))
                 self._fX = np.vstack((self._fX, fX_next))
+                # observations which will be used for the gaussian process, they increase each iteration
 
                 if self.verbose and fX_next.min() < self.fX.min():
                     n_evals, fbest = self.n_evals, fX_next.min()
