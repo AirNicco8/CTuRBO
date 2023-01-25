@@ -85,6 +85,7 @@ class Turbo1:
         # Save function information
         self.f = f
 
+        self.cs = list()
         # Constraints (time, mem)
         for i in cs:
             if i==0: # the constraint is not used
@@ -95,6 +96,10 @@ class Turbo1:
         self.dim = len(lb)
         self.lb = lb
         self.ub = ub
+
+        # Constrained resources
+        self.currTime = 0
+        self.currMem = 0
 
         # Settings
         self.n_init = n_init
@@ -149,6 +154,7 @@ class Turbo1:
 
     def _add_resources(self, v):
         for el in v:
+            el = el[0]
             self.currTime+= el[0]
             self.currMem+= el[1]
 
@@ -274,7 +280,8 @@ class Turbo1:
 
             # Generate and evalute initial design points
             X_init = latin_hypercube(self.n_init, self.dim) # sample n_init x dim points using LHS, gives values in [0,1]
-            X_init = from_unit_cube(X_init, self.lb, self.ub) # normalize samples from [0,1] into [lb, ub]
+            X_init = from_unit_cube(X_init, self.lb, self.ub) # normalize samples from [0,1] into [lb, ub]7
+            X_init = X_init.astype(int)
             fX_init = np.array([[self.f(x)] for x in X_init]) # evaluate samples with objective f
 
             # Update budget and set as initial data for this TR
