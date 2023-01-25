@@ -28,7 +28,7 @@ class Turbo1:
     Parameters
     ----------
     f : function handle
-    cs : constraint functions
+    cs : constraints for time(sec) and memAvg(Mb), if a value is 0 the constraint is not considered
     lb : Lower variable bounds, numpy.array, shape (d,).
     ub : Upper variable bounds, numpy.array, shape (d,).
     n_init : Number of initial points (2*dim is recommended), int.
@@ -84,7 +84,14 @@ class Turbo1:
 
         # Save function information
         self.f = f
-        self.cs = cs
+
+        # Constraints (time, mem)
+        for i in cs:
+            if i==0: # the constraint is not used
+                self.cs.append(np.inf) 
+            else:
+                self.cs.append(i)
+
         self.dim = len(lb)
         self.lb = lb
         self.ub = ub
@@ -136,6 +143,9 @@ class Turbo1:
         self.failcount = 0
         self.succcount = 0
         self.length = self.length_init
+    
+    def _constraints_check(self):
+        return (self.currTime < self.cs[0] and self.currMem < self.cs[1])
 
     def _adjust_length(self, fX_next):
         if np.min(fX_next) < np.min(self._fX) - 1e-3 * math.fabs(np.min(self._fX)):
@@ -226,7 +236,7 @@ class Turbo1:
             y_cand = gp.likelihood(gp(X_cand_torch)).sample(torch.Size([self.batch_size])).t().cpu().detach().numpy()
             # realization drawn from posterior = (gp/prior -> likelihood), the number of realizations is the same as the batch_size
             # sample a possible realization/function which is consistent with X_cand datapoints
-            # y_cand shape is n_cand(dim*100) x batch_size, every value is a possible function output for a candidate X
+            # y_cand shape is n_cand(dim*100) x batch_size, selected realization output for all candidates
 
         # Remove the torch variables
         del X_torch, y_torch, X_cand_torch, gp
@@ -241,14 +251,14 @@ class Turbo1:
         X_next = np.ones((self.batch_size, self.dim))
         for i in range(self.batch_size):
             # Pick the best point and make sure we never pick it again
-            indbest = np.argmin(y_cand[:, i]) # pick the best value for each element of the batch (n_cand array)
+            indbest = np.argmin(y_cand[:, i]) # pick the best value (min in realization) for each element of the batch (n_cand array)
             X_next[i, :] = deepcopy(X_cand[indbest, :]) # the related input X is the next value
             y_cand[indbest, :] = np.inf
         return X_next
 
     def optimize(self):
         """Run the full optimization process."""
-        while self.n_evals < self.max_evals:
+        while self.n_evals < self.max_evals and self._constraints_check():
             if len(self._fX) > 0 and self.verbose:
                 n_evals, fbest = self.n_evals, self._fX.min()
                 print(f"{n_evals}) Restarting with fbest = {fbest:.4}")
@@ -277,7 +287,7 @@ class Turbo1:
                 sys.stdout.flush()
 
             # Thompson sample to get next suggestions
-            while self.n_evals < self.max_evals and self.length >= self.length_min:
+            while self.n_evals < self.max_evals and self.length >= self.length_min: # if length goes under lower thold -> restart with new TR (but keep budget)
                 # Warp inputs
                 X = to_unit_cube(deepcopy(self._X), self.lb, self.ub)
 
@@ -300,6 +310,7 @@ class Turbo1:
 
                 # Update trust region
                 self._adjust_length(fX_next)
+                # success or failures increase by at most 1 for each iteration
 
                 # Update budget and append data
                 self.n_evals += self.batch_size

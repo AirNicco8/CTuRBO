@@ -28,6 +28,7 @@ class TurboM(Turbo1):
     Parameters
     ----------
     f : function handle
+    cs : constraints for time(sec) and memAvg(Mb), if a value is 0 the constraint is not considered
     lb : Lower variable bounds, numpy.array, shape (d,).
     ub : Upper variable bounds, numpy.array, shape (d,).
     n_init : Number of initial points *FOR EACH TRUST REGION* (2*dim is recommended), int.
@@ -43,7 +44,7 @@ class TurboM(Turbo1):
     dtype : Dtype to use for GP fitting ("float32" or "float64")
 
     Example usage:
-        turbo5 = TurboM(f=f, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals, n_trust_regions=5)
+        turbo5 = TurboM(f=f, cs=cs, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals, n_trust_regions=5)
         turbo5.optimize()  # Run optimization
         X, fX = turbo5.X, turbo5.fX  # Evaluated points
     """
@@ -162,11 +163,12 @@ class TurboM(Turbo1):
                 sys.stdout.flush()
 
         # Thompson sample to get next suggestions
-        while self.n_evals < self.max_evals:
+        while (self.n_evals < self.max_evals) and self._constraints_check():
 
             # Generate candidates from each TR
             X_cand = np.zeros((self.n_trust_regions, self.n_cand, self.dim))
             y_cand = np.inf * np.ones((self.n_trust_regions, self.n_cand, self.batch_size))
+            
             for i in range(self.n_trust_regions):
                 idx = np.where(self._idx == i)[0]  # Extract all "active" indices
 
