@@ -147,6 +147,11 @@ class Turbo1:
     def _constraints_check(self):
         return (self.currTime < self.cs[0] and self.currMem < self.cs[1])
 
+    def _add_resources(self, v):
+        for el in v:
+            self.currTime+= el[0]
+            self.currMem+= el[1]
+
     def _adjust_length(self, fX_next):
         if np.min(fX_next) < np.min(self._fX) - 1e-3 * math.fabs(np.min(self._fX)):
             self.succcount += 1
@@ -305,8 +310,13 @@ class Turbo1:
                 # Undo the warping
                 X_next = from_unit_cube(X_next, self.lb, self.ub)
 
+                evaluations = [[self.f(x)] for x in X_next]
                 # Evaluate batch
-                fX_next = np.array([[self.f(x)] for x in X_next])
+                fX_next = np.array(evaluations)
+                                
+                resources = [[self.f.get_res(x)] for x in X_next]
+                # Get resources used
+                self._add_resources(resources)
 
                 # Update trust region
                 self._adjust_length(fX_next)

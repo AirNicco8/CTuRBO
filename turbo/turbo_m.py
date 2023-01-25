@@ -194,8 +194,13 @@ class TurboM(Turbo1):
             # Undo the warping
             X_next = from_unit_cube(X_next, self.lb, self.ub)
 
+            evaluations = [[self.f(x)] for x in X_next]
             # Evaluate batch
-            fX_next = np.array([[self.f(x)] for x in X_next])
+            fX_next = np.array(evaluations)
+                            
+            resources = [[self.f.get_res(x)] for x in X_next]
+            # Get resources used
+            self._add_resources(resources)
 
             # Update trust regions
             for i in range(self.n_trust_regions):
