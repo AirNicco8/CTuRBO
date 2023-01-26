@@ -1,4 +1,4 @@
-from turbo import Turbo1
+from turbo import Turbo1, TurboM
 import numpy as np
 import pandas as pd
 import re
@@ -6,6 +6,10 @@ import torch
 import math
 import matplotlib
 import matplotlib.pyplot as plt
+import argparse
+
+import warnings
+warnings.filterwarnings("ignore")
 
 def pyflatten(l):
     return [item for sublist in l for item in sublist]
@@ -61,65 +65,73 @@ class dataANT:
     def get_res(self, x): 
         return self.get_df_feat(x, ['time(sec)','memAvg(MB)'])
 
+def check_one(value):
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError("%s must be at least 1" % value)
+    return ivalue
 
-f = dataANT()
+def check_zero(value):
+    ivalue = int(value)
+    if ivalue < 0:
+        raise argparse.ArgumentTypeError("%s must be at least 0" % value)
+    return ivalue
 
-class Levy:
-    def __init__(self, dim=10):
-        self.dim = dim
-        self.lb = -5 * np.ones(dim)
-        self.ub = 10 * np.ones(dim)
-        
-    def __call__(self, x):
+if __name__== "__main__":
+    f = dataANT()
 
-        w = 1 + (x - 1.0) / 4.0
-        val = np.sin(np.pi * w[0]) ** 2 + \
-            np.sum((w[1:self.dim - 1] - 1) ** 2 * (1 + 10 * np.sin(np.pi * w[1:self.dim - 1] + 1) ** 2)) + \
-            (w[self.dim - 1] - 1) ** 2 * (1 + np.sin(2 * np.pi * w[self.dim - 1])**2)
-        return val
+    # Create the parser
+    parser = argparse.ArgumentParser()
+    # Add an argument
+    parser.add_argument('--max_time', default=0, type=check_zero, help='Time constraint for function calls, pass 0 to not use constraint')
+    parser.add_argument('--max_mem', default=0, type=check_zero, help='Memory constraint for function calls, pass 0 to not use constraint')
+    parser.add_argument('--max_evals', default=200, type=check_zero)
+    parser.add_argument('--n_init', default=20, type=check_one)
+    parser.add_argument('--trust_regions', default=5, type=check_one)
+    # Parse the argument
+    args = parser.parse_args()
 
-f2 = Levy(10)
+    if args.trust_regions == 1:
+        turbo = Turbo1(
+            f=f,  # Handle to objective function
+            cs=[args.max_time, args.max_mem],
+            lb=f.lb,  # Numpy array specifying lower bounds
+            ub=f.ub,  # Numpy array specifying upper bounds
+            n_init=20,  # Number of initial bounds from an Latin hypercube design
+            max_evals = args.max_evals,  # Maximum number of evaluations
+            batch_size=1,  # How large batch size TuRBO uses
+            verbose=True,  # Print information from each batch
+            use_ard=True,  # Set to true if you want to use ARD for the GP kernel
+            max_cholesky_size=2000,  # When we switch from Cholesky to Lanczos
+            n_training_steps=50,  # Number of steps of ADAM to learn the hypers
+            min_cuda=1024,  # Run on the CPU for small datasets
+            device="cpu",  # "cpu" or "cuda"
+            dtype="float64",  # float64 or float32
+        )
+    else:
+      turbo = TurboM(
+        f=f,  # Handle to objective function
+        cs=[args.max_time, args.max_mem],
+        lb=f.lb,  # Numpy array specifying lower bounds
+        ub=f.ub,  # Numpy array specifying upper bounds
+        n_init=20,  # Number of initial bounds from an Latin hypercube design
+        max_evals = args.max_evals,  # Maximum number of evaluations
+        n_trust_regions=args.trust_regions,  # Number of trust regions
+        batch_size=1,  # How large batch size TuRBO uses
+        verbose=True,  # Print information from each batch
+        use_ard=True,  # Set to true if you want to use ARD for the GP kernel
+        max_cholesky_size=2000,  # When we switch from Cholesky to Lanczos
+        n_training_steps=50,  # Number of steps of ADAM to learn the hypers
+        min_cuda=1024,  # Run on the CPU for small datasets
+        device="cpu",  # "cpu" or "cuda"
+        dtype="float64",  # float64 or float32
+        )
 
-turbo1 = Turbo1(
-    f=f,  # Handle to objective function
-    cs=[0,1],
-    lb=f.lb,  # Numpy array specifying lower bounds
-    ub=f.ub,  # Numpy array specifying upper bounds
-    n_init=20,  # Number of initial bounds from an Latin hypercube design
-    max_evals = 500,  # Maximum number of evaluations
-    batch_size=100,  # How large batch size TuRBO uses
-    verbose=True,  # Print information from each batch
-    use_ard=True,  # Set to true if you want to use ARD for the GP kernel
-    max_cholesky_size=2000,  # When we switch from Cholesky to Lanczos
-    n_training_steps=50,  # Number of steps of ADAM to learn the hypers
-    min_cuda=1024,  # Run on the CPU for small datasets
-    device="cpu",  # "cpu" or "cuda"
-    dtype="float64",  # float64 or float32
-)
+    turbo.optimize()
 
+    X = turbo.X.astype(int)  # Evaluated points
+    fX = turbo.fX.astype(int)  # Observed values
+    ind_best = np.argmin(fX)
+    f_best, x_best = fX[ind_best], X[ind_best, :]
 
-turbo2 = Turbo1(
-    f=f2,  # Handle to objective function
-    cs=[0,1],
-    lb=f2.lb,  # Numpy array specifying lower bounds
-    ub=f2.ub,  # Numpy array specifying upper bounds
-    n_init=20,  # Number of initial bounds from an Latin hypercube design
-    max_evals = 500,  # Maximum number of evaluations
-    batch_size=100,  # How large batch size TuRBO uses
-    verbose=True,  # Print information from each batch
-    use_ard=True,  # Set to true if you want to use ARD for the GP kernel
-    max_cholesky_size=2000,  # When we switch from Cholesky to Lanczos
-    n_training_steps=50,  # Number of steps of ADAM to learn the hypers
-    min_cuda=1024,  # Run on the CPU for small datasets
-    device="cpu",  # "cpu" or "cuda"
-    dtype="float64",  # float64 or float32
-)
-
-turbo1.optimize()
-
-X = turbo1.X  # Evaluated points
-fX = turbo1.fX  # Observed values
-ind_best = np.argmin(fX)
-f_best, x_best = fX[ind_best], X[ind_best, :]
-
-print("Best value found:\n\tf(x) = %.3f\nObserved at:\n\tx = %s" % (f_best, np.around(x_best, 3)))
+    print("Best value found:\n\tf(x) = %.3f\nObserved at:\n\tx = %s\nWith time: %d seconds ,and memory: %d Mb" % (f_best, np.around(x_best, 3), turbo.currTime, turbo.currMem))

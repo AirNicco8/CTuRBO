@@ -269,7 +269,7 @@ class Turbo1:
 
     def optimize(self):
         """Run the full optimization process."""
-        while self.n_evals < self.max_evals and self._constraints_check():
+        while (self.n_evals < self.max_evals) and self._constraints_check():
             if len(self._fX) > 0 and self.verbose:
                 n_evals, fbest = self.n_evals, self._fX.min()
                 print(f"{n_evals}) Restarting with fbest = {fbest:.4}")
@@ -299,7 +299,7 @@ class Turbo1:
                 sys.stdout.flush()
 
             # Thompson sample to get next suggestions
-            while self.n_evals < self.max_evals and self.length >= self.length_min: # if length goes under lower thold -> restart with new TR (but keep budget)
+            while self.n_evals < self.max_evals and self.length >= self.length_min and self._constraints_check(): # if length goes under lower thold -> restart with new TR (but keep budget)
                 # Warp inputs
                 X = to_unit_cube(deepcopy(self._X), self.lb, self.ub)
 

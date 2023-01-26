@@ -222,35 +222,36 @@ class TurboM(Turbo1):
             self._idx = np.vstack((self._idx, deepcopy(idx_next)))
 
             # Check if any TR needs to be restarted
-            for i in range(self.n_trust_regions):
-                if self.length[i] < self.length_min:  # Restart trust region if converged
-                    idx_i = self._idx[:, 0] == i
+            if self._constraints_check():
+                for i in range(self.n_trust_regions):
+                    if self.length[i] < self.length_min:  # Restart trust region if converged
+                        idx_i = self._idx[:, 0] == i
 
-                    if self.verbose:
-                        n_evals, fbest = self.n_evals, self.fX[idx_i, 0].min()
-                        print(f"{n_evals}) TR-{i} converged to: : {fbest:.4}")
-                        sys.stdout.flush()
+                        if self.verbose:
+                            n_evals, fbest = self.n_evals, self.fX[idx_i, 0].min()
+                            print(f"{n_evals}) TR-{i} converged to: : {fbest:.4}")
+                            sys.stdout.flush()
 
-                    # Reset length and counters, remove old data from trust region
-                    self.length[i] = self.length_init
-                    self.succcount[i] = 0
-                    self.failcount[i] = 0
-                    self._idx[idx_i, 0] = -1  # Remove points from trust region
-                    self.hypers[i] = {}  # Remove model hypers
+                        # Reset length and counters, remove old data from trust region
+                        self.length[i] = self.length_init
+                        self.succcount[i] = 0
+                        self.failcount[i] = 0
+                        self._idx[idx_i, 0] = -1  # Remove points from trust region
+                        self.hypers[i] = {}  # Remove model hypers
 
-                    # Create a new initial design
-                    X_init = latin_hypercube(self.n_init, self.dim)
-                    X_init = from_unit_cube(X_init, self.lb, self.ub)
-                    fX_init = np.array([[self.f(x)] for x in X_init])
+                        # Create a new initial design
+                        X_init = latin_hypercube(self.n_init, self.dim)
+                        X_init = from_unit_cube(X_init, self.lb, self.ub)
+                        fX_init = np.array([[self.f(x)] for x in X_init])
 
-                    # Print progress
-                    if self.verbose:
-                        n_evals, fbest = self.n_evals, fX_init.min()
-                        print(f"{n_evals}) TR-{i} is restarting from: : {fbest:.4}")
-                        sys.stdout.flush()
+                        # Print progress
+                        if self.verbose:
+                            n_evals, fbest = self.n_evals, fX_init.min()
+                            print(f"{n_evals}) TR-{i} is restarting from: : {fbest:.4}")
+                            sys.stdout.flush()
 
-                    # Append data to local history
-                    self.X = np.vstack((self.X, X_init))
-                    self.fX = np.vstack((self.fX, fX_init))
-                    self._idx = np.vstack((self._idx, i * np.ones((self.n_init, 1), dtype=int)))
-                    self.n_evals += self.n_init
+                        # Append data to local history
+                        self.X = np.vstack((self.X, X_init))
+                        self.fX = np.vstack((self.fX, fX_init))
+                        self._idx = np.vstack((self._idx, i * np.ones((self.n_init, 1), dtype=int)))
+                        self.n_evals += self.n_init
