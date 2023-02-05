@@ -17,7 +17,6 @@ def pyflatten(l):
 def procPVL(l): #apply to 'PV' or 'Load' features and transform them from strings to float arrays
   l=l.split('\n')
   r=[]
- # print(l)
   for i in l:
     i = re.sub(r'\[', '', i)
     i = re.sub(r'  +', ' ', i)
@@ -54,10 +53,9 @@ class dataANT:
         par = int(round(x[0])) # parametro discreto
         inst = int(round(x[1]))
 
-        if s == ['sol(keuro)']:
-            return df.loc[df['nScenarios']==par].loc[:,s].iloc[inst].values[0]
-        else:
-            return df.loc[df['nScenarios']==par].loc[:,s].iloc[inst].values
+        tor = df.loc[df['nScenarios']==par].loc[:,s].iloc[inst].values
+
+        return tor[0] if s == ['sol(keuro)'] else tor
         
     def __call__(self, x):
         return self.get_df_feat(x, ['sol(keuro)'])
@@ -94,6 +92,7 @@ if __name__== "__main__":
     if args.trust_regions == 1:
         turbo = Turbo1(
             f=f,  # Handle to objective function
+            tcs=[0, 0], # (!!!) DEBUG passing
             cs=[args.max_time, args.max_mem],
             lb=f.lb,  # Numpy array specifying lower bounds
             ub=f.ub,  # Numpy array specifying upper bounds
@@ -111,7 +110,7 @@ if __name__== "__main__":
     else:
       turbo = TurboM(
         f=f,  # Handle to objective function
-        cs=[args.max_time, args.max_mem],
+        tcs=[args.max_time, args.max_mem],
         lb=f.lb,  # Numpy array specifying lower bounds
         ub=f.ub,  # Numpy array specifying upper bounds
         n_init=20,  # Number of initial bounds from an Latin hypercube design

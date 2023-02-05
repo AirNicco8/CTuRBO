@@ -28,7 +28,8 @@ class Turbo1:
     Parameters
     ----------
     f : function handle
-    cs : constraints for time(sec) and memAvg(Mb), if a value is 0 the constraint is not considered
+    tcs : cumulative constraints for time(sec) and memAvg(Mb), if a value is 0 the constraint is not considered
+    cs : single evaluation constraints for time(sec) and memAvg(Mb), if a value is 0 the constraint is not considered
     lb : Lower variable bounds, numpy.array, shape (d,).
     ub : Upper variable bounds, numpy.array, shape (d,).
     n_init : Number of initial points (2*dim is recommended), int.
@@ -51,6 +52,7 @@ class Turbo1:
     def __init__(
         self,
         f,
+        tcs,
         cs,
         lb,
         ub,
@@ -85,13 +87,23 @@ class Turbo1:
         # Save function information
         self.f = f
 
+        self.tcs = list()
+        # Total budger Constraints (time, mem)
+        for i in tcs:
+            if i==0: # the constraint is not used
+                self.tcs.append(np.inf) 
+            else:
+                self.tcs.append(i)
+
         self.cs = list()
-        # Constraints (time, mem)
+        # single eval Constraints (time, mem)
         for i in cs:
             if i==0: # the constraint is not used
                 self.cs.append(np.inf) 
             else:
                 self.cs.append(i)
+
+        self.cs_range = range(len(self.cs))
 
         self.dim = len(lb)
         self.lb = lb
@@ -130,6 +142,7 @@ class Turbo1:
         # Save the full history
         self.X = np.zeros((0, self.dim))
         self.fX = np.zeros((0, 1))
+        self.cX = np.zeros((0, len(self.cs)))
 
         # Device and dtype for GPyTorch
         self.min_cuda = min_cuda
@@ -145,16 +158,24 @@ class Turbo1:
     def _restart(self):
         self._X = []
         self._fX = []
+        self._cX = []
         self.failcount = 0
         self.succcount = 0
         self.length = self.length_init
     
-    def _constraints_check(self):
-        return (self.currTime < self.cs[0] and self.currMem < self.cs[1])
+    def _cum_constraints_check(self):
+        return (self.currTime < self.tcs[0] and self.currMem < self.tcs[1])
+
+    def _constraints_violation(self, estimates):
+        tmp=np.zeros(estimates.shape[0])
+        for i in self.cs_range:
+            np.hstack((tmp,self.cs[i] - estimates[:,i]))
+
+        print(np.sum(tmp, axis=0).shape)
+        return 0
 
     def _add_resources(self, v):
         for el in v:
-            el = el[0]
             self.currTime+= el[0]
             self.currMem+= el[1]
 
@@ -173,7 +194,7 @@ class Turbo1:
             self.length /= 2.0
             self.failcount = 0
 
-    def _create_candidates(self, X, fX, length, n_training_steps, hypers):
+    def _create_candidates(self, X, fX, cX, length, n_training_steps, hypers):
         """Generate candidates assuming X has been scaled to [0,1]^d."""
         # Pick the center as the point with the smallest function values
         # NOTE: This may not be robust to noise, in which case the posterior mean of the GP can be used instead
@@ -184,6 +205,15 @@ class Turbo1:
         sigma = 1.0 if sigma < 1e-6 else sigma
         fX = (deepcopy(fX) - mu) / sigma
 
+
+        # Standardize constraints (?) values.
+        # mu_c = [0]*len(self.cs)
+        # sigma_c = [0]*len(self.cs)
+        # for i in self.cs_range:
+        #     mu_c[i], sigma_c[i] = np.median(cX[:,i]), cX[:,i].std()
+        #     sigma_c[i] = 1.0 if sigma_c[i] < 1e-6 else sigma_c[i]
+        #     cX[:,i] = (deepcopy(cX[:,i]) - mu_c[i]) / sigma_c[i]
+
         # Figure out what device we are running on
         if len(X) < self.min_cuda:
             device, dtype = torch.device("cpu"), torch.float64
@@ -191,6 +221,7 @@ class Turbo1:
             device, dtype = self.device, self.dtype
 
         # We use CG + Lanczos for training if we have enough data
+        # GP for objective
         with gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
             X_torch = torch.tensor(X).to(device=device, dtype=dtype)
             y_torch = torch.tensor(fX).to(device=device, dtype=dtype)
@@ -200,6 +231,18 @@ class Turbo1:
 
             # Save state dict
             hypers = gp.state_dict()
+
+        # GPs for constraints
+        cgps = [0]*len(self.cs)
+        c_hypers = [0]*len(self.cs)
+        for i in self.cs_range:
+            with gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
+                cgps[i] = train_gp(
+                    train_x=X_torch, train_y=torch.tensor(cX[:,i]).to(device=device, dtype=dtype), use_ard=self.use_ard, num_steps=n_training_steps, hypers=hypers # surrogate GP
+                )
+
+                # Save state dict
+                c_hypers[i] = cgps[i].state_dict()
 
         # Create the trust region boundaries
         x_center = X[fX.argmin().item(), :][None, :] # best solution found so far
@@ -235,10 +278,14 @@ class Turbo1:
         else:
             device, dtype = self.device, self.dtype
 
-        # We may have to move the GP to a new device
+        # We may have to move the GPs to a new device
         gp = gp.to(dtype=dtype, device=device)
 
+        for i in self.cs_range:
+            cgps[i] = cgps[i].to(dtype=dtype, device=device)
+
         # We use Lanczos for sampling if we have enough data
+        cs_cand=[0]*len(self.cs)
         with torch.no_grad(), gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
             X_cand_torch = torch.tensor(X_cand).to(device=device, dtype=dtype)
             # X_cand shape is n_cand(dim*100) x dim
@@ -249,27 +296,51 @@ class Turbo1:
             # sample a possible realization/function which is consistent with X_cand datapoints
             # y_cand shape is n_cand(dim*100) x batch_size, selected realization output for all candidates
 
+            for i in self.cs_range:
+                cs_cand[i] = cgps[i].likelihood(cgps[i](X_cand_torch)).sample(torch.Size([self.batch_size])).t().cpu().detach().numpy()
+
         # Remove the torch variables
-        del X_torch, y_torch, X_cand_torch, gp
+        del X_torch, y_torch, X_cand_torch, gp, cgps
 
         # De-standardize the sampled values
         y_cand = mu + sigma * y_cand
 
-        return X_cand, y_cand, hypers
+        # for i in self.cs_range:
+        #     cs_cand[i] = mu_c[i] + sigma_c[i] * cs_cand[i]
 
-    def _select_candidates(self, X_cand, y_cand):
+        return X_cand, y_cand, cs_cand, hypers
+
+    def _select_candidates(self, X_cand, y_cand, cs_cand):
         """Select candidates."""
         X_next = np.ones((self.batch_size, self.dim))
+
+        cs_cand = np.hstack((cs_cand[0], cs_cand[1]))
+    
         for i in range(self.batch_size):
             # Pick the best point and make sure we never pick it again
-            indbest = np.argmin(y_cand[:, i]) # pick the best value (min in realization) for each element of the batch (n_cand array)
+            assert cs_cand.shape[0] == y_cand.shape[0]
+
+            satisfactions = [cs_cand[:,i]<self.cs[i] for i in self.cs_range]
+            cum_and = satisfactions[0]
+            for e in satisfactions[1:]:
+                cum_and = np.logical_and(cum_and, e)
+
+            if y_cand[:, i][cum_and].size: # set of candidates which respect the constraints is not empty
+                subset_idx = np.argmin(y_cand[:, i][cum_and])
+                indbest = np.arange(y_cand[:, i].shape[0])[cum_and][subset_idx]
+            else: # take minimum violation 
+                # (!!! TODO)
+                total_violations = self._constraints_violation(cs_cand)
+                print(total_violations.shape)
+
+            # pick the best value (min in realization) for each element of the batch (n_cand array)
             X_next[i, :] = deepcopy(X_cand[indbest, :]) # the related input X is the next value
             y_cand[indbest, :] = np.inf
         return X_next
 
     def optimize(self):
         """Run the full optimization process."""
-        while (self.n_evals < self.max_evals) and self._constraints_check():
+        while (self.n_evals < self.max_evals) and self._cum_constraints_check():
             if len(self._fX) > 0 and self.verbose:
                 n_evals, fbest = self.n_evals, self._fX.min()
                 print(f"{n_evals}) Restarting with fbest = {fbest:.4}")
@@ -283,15 +354,19 @@ class Turbo1:
             X_init = from_unit_cube(X_init, self.lb, self.ub) # normalize samples from [0,1] into [lb, ub]7
             X_init = X_init.astype(int)
             fX_init = np.array([[self.f(x)] for x in X_init]) # evaluate samples with objective f
+            cX_init = np.array([self.f.get_res(x) for x in X_init]) # evaluate samples with constraints 
+
 
             # Update budget and set as initial data for this TR
             self.n_evals += self.n_init
             self._X = deepcopy(X_init) # these are the actual X and fX
             self._fX = deepcopy(fX_init) # for the iteration
+            self._cX = deepcopy(cX_init) 
 
             # Append data to the GLOBAL HISTORY
             self.X = np.vstack((self.X, deepcopy(X_init)))
             self.fX = np.vstack((self.fX, deepcopy(fX_init)))
+            self.cX = np.vstack((self.cX, deepcopy(cX_init)))
 
             if self.verbose:
                 fbest = self._fX.min()
@@ -299,19 +374,20 @@ class Turbo1:
                 sys.stdout.flush()
 
             # Thompson sample to get next suggestions
-            while self.n_evals < self.max_evals and self.length >= self.length_min and self._constraints_check(): # if length goes under lower thold -> restart with new TR (but keep budget)
+            while self.n_evals < self.max_evals and self.length >= self.length_min and self._cum_constraints_check(): # if length goes under lower thold -> restart with new TR (but keep budget)
                 # Warp inputs
                 X = to_unit_cube(deepcopy(self._X), self.lb, self.ub)
 
                 # Standardize values
                 fX = deepcopy(self._fX).ravel()
+                cX = deepcopy(self._cX)
 
                 # Create the next batch
-                X_cand, y_cand, _ = self._create_candidates(
-                    X, fX, length=self.length, n_training_steps=self.n_training_steps, hypers={}
+                X_cand, y_cand, cs_cand, _ = self._create_candidates(
+                    X, fX, cX, length=self.length, n_training_steps=self.n_training_steps, hypers={}
                 )
 
-                X_next = self._select_candidates(X_cand, y_cand) 
+                X_next = self._select_candidates(X_cand, y_cand, cs_cand)
                 # here we have a single (batch) point which is the next point to evaluate
 
                 # Undo the warping
@@ -321,7 +397,8 @@ class Turbo1:
                 # Evaluate batch
                 fX_next = np.array(evaluations)
                                 
-                resources = [[self.f.get_res(x)] for x in X_next]
+                resources = [self.f.get_res(x) for x in X_next]
+                cX_next = np.array(resources)
                 # Get resources used
                 self._add_resources(resources)
 
@@ -334,6 +411,7 @@ class Turbo1:
 
                 self._X = np.vstack((self._X, X_next))
                 self._fX = np.vstack((self._fX, fX_next))
+                self._cX = np.vstack((self._cX, cX_next))
                 # observations which will be used for the gaussian process, they increase each iteration
 
                 if self.verbose and fX_next.min() < self.fX.min():
@@ -344,3 +422,4 @@ class Turbo1:
                 # Append data to the global history
                 self.X = np.vstack((self.X, deepcopy(X_next)))
                 self.fX = np.vstack((self.fX, deepcopy(fX_next)))
+                self.cX = np.vstack((self.cX, deepcopy(cX_next)))
