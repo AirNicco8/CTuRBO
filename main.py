@@ -81,8 +81,11 @@ if __name__== "__main__":
     # Create the parser
     parser = argparse.ArgumentParser()
     # Add an argument
-    parser.add_argument('--max_time', default=0, type=check_zero, help='Time constraint for function calls, pass 0 to not use constraint')
-    parser.add_argument('--max_mem', default=0, type=check_zero, help='Memory constraint for function calls, pass 0 to not use constraint')
+    parser.add_argument('--max_time', default=0, type=check_zero, help='Time constraint for single function call, pass 0 to not use constraint')
+    parser.add_argument('--max_mem', default=0, type=check_zero, help='Memory constraint for single function call, pass 0 to not use constraint')
+    parser.add_argument('--cum_time', default=0, type=check_zero, help='Cumulative time constraint for function calls, pass 0 to not use constraint')
+    parser.add_argument('--cum_mem', default=0, type=check_zero, help='Cumulative memory constraint for function calls, pass 0 to not use constraint')
+    parser.add_argument('--batch_size', default=1, type=check_one)
     parser.add_argument('--max_evals', default=200, type=check_zero)
     parser.add_argument('--n_init', default=20, type=check_one)
     parser.add_argument('--trust_regions', default=5, type=check_one)
@@ -92,13 +95,13 @@ if __name__== "__main__":
     if args.trust_regions == 1:
         turbo = Turbo1(
             f=f,  # Handle to objective function
-            tcs=[0, 0], # (!!!) DEBUG passing
+            tcs=[args.cum_time, args.cum_mem], 
             cs=[args.max_time, args.max_mem],
             lb=f.lb,  # Numpy array specifying lower bounds
             ub=f.ub,  # Numpy array specifying upper bounds
             n_init=20,  # Number of initial bounds from an Latin hypercube design
             max_evals = args.max_evals,  # Maximum number of evaluations
-            batch_size=1,  # How large batch size TuRBO uses
+            batch_size=args.batch_size,  # How large batch size TuRBO uses
             verbose=True,  # Print information from each batch
             use_ard=True,  # Set to true if you want to use ARD for the GP kernel
             max_cholesky_size=2000,  # When we switch from Cholesky to Lanczos
@@ -110,13 +113,14 @@ if __name__== "__main__":
     else:
       turbo = TurboM(
         f=f,  # Handle to objective function
-        tcs=[args.max_time, args.max_mem],
+        tcs=[args.cum_time, args.cum_mem], 
+        cs=[args.max_time, args.max_mem],
         lb=f.lb,  # Numpy array specifying lower bounds
         ub=f.ub,  # Numpy array specifying upper bounds
         n_init=20,  # Number of initial bounds from an Latin hypercube design
         max_evals = args.max_evals,  # Maximum number of evaluations
         n_trust_regions=args.trust_regions,  # Number of trust regions
-        batch_size=1,  # How large batch size TuRBO uses
+        batch_size=args.batch_size,  # How large batch size TuRBO uses
         verbose=True,  # Print information from each batch
         use_ard=True,  # Set to true if you want to use ARD for the GP kernel
         max_cholesky_size=2000,  # When we switch from Cholesky to Lanczos
@@ -130,7 +134,9 @@ if __name__== "__main__":
 
     X = turbo.X.astype(int)  # Evaluated points
     fX = turbo.fX.astype(int)  # Observed values
+    cX = turbo.cX.astype(int)  # Observed resources
     ind_best = np.argmin(fX)
-    f_best, x_best = fX[ind_best], X[ind_best, :]
+    f_best, x_best, c_best = fX[ind_best], X[ind_best, :], cX[ind_best, :]
 
-    print("Best value found:\n\tf(x) = %.3f\nObserved at:\n\tx = %s\nWith time: %d seconds ,and memory: %d Mb" % (f_best, np.around(x_best, 3), turbo.currTime, turbo.currMem))
+    print("Best value found:\n\tf(x) = %.3f\nObserved at:\n\tx = %s\nWith time: %d seconds, and memory: %d Mb" % (f_best, np.around(x_best, 3), c_best[0], c_best[1]))
+    print("with total time: %d seconds, and total memory: %d Mb" % (turbo.currTime, turbo.currMem))

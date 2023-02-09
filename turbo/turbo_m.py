@@ -52,6 +52,7 @@ class TurboM(Turbo1):
     def __init__(
         self,
         f,
+        tcs,
         cs,
         lb,
         ub,
@@ -70,6 +71,7 @@ class TurboM(Turbo1):
         self.n_trust_regions = n_trust_regions
         super().__init__(
             f=f,
+            tcs=tcs,
             cs=cs,
             lb=lb,
             ub=ub,
@@ -99,6 +101,16 @@ class TurboM(Turbo1):
         # Initialize parameters
         self._restart()
 
+    def _constraints_violation(self, estimates):
+        tmp = np.zeros((estimates.shape[0],estimates.shape[1]))
+        
+        for i in self.cs_range:
+            violations = self.cs[i] - estimates[:, :, i]
+            violations[violations > 0] = 0.0
+            
+            tmp = np.dstack((tmp, violations))
+        return np.sum(tmp, axis=2)
+
     def _restart(self):
         self._idx = np.zeros((0, 1), dtype=int)  # Track what trust region proposed what using an index vector
         self.failcount = np.zeros(self.n_trust_regions, dtype=int)
@@ -123,7 +135,7 @@ class TurboM(Turbo1):
             self.length[i] /= 2.0
             self.failcount[i] = 0
 
-    def _select_candidates(self, X_cand, y_cand):
+    def _select_candidates(self, X_cand, y_cand, c_cand):
         """Select candidates from samples from all trust regions."""
         assert X_cand.shape == (self.n_trust_regions, self.n_cand, self.dim)
         assert y_cand.shape == (self.n_trust_regions, self.n_cand, self.batch_size)
@@ -131,9 +143,26 @@ class TurboM(Turbo1):
 
         X_next = np.zeros((self.batch_size, self.dim))
         idx_next = np.zeros((self.batch_size, 1), dtype=int)
+
         for k in range(self.batch_size):
-            i, j = np.unravel_index(np.argmin(y_cand[:, :, k]), (self.n_trust_regions, self.n_cand))
-            assert y_cand[:, :, k].min() == y_cand[i, j, k]
+            cs_cand = c_cand[:,:,k,:] # select the couple of constraints realization from the batch
+            assert cs_cand.shape[0] == y_cand.shape[0]
+
+            satisfactions = [cs_cand[:,:,i]<self.cs[i] for i in self.cs_range]
+            cum_and = np.isfinite(y_cand[:, :, k])
+            for e in satisfactions:
+                cum_and = np.logical_and(cum_and, e)
+
+            if y_cand[:, :, k][cum_and].size: # set of candidates which respect the constraints is not empty
+                subset_idx = np.argmin(y_cand[:, :, k][cum_and])
+                indbest = np.arange(y_cand[:, :, k].size)[cum_and.ravel()][subset_idx]
+            else: # take minimum violation 
+                total_violations = -(self._constraints_violation(cs_cand))
+                mask = np.isfinite(y_cand[:, :, k])
+                subset_idx = np.argmin(total_violations[mask])
+                indbest = np.arange(y_cand[:, :, k].size)[mask.ravel()][subset_idx]
+
+            i, j = np.unravel_index(indbest, (self.n_trust_regions, self.n_cand))
             X_next[k, :] = deepcopy(X_cand[i, j, :])
             idx_next[k, 0] = i
             assert np.isfinite(y_cand[i, j, k])  # Just to make sure we never select nan or inf
@@ -150,10 +179,12 @@ class TurboM(Turbo1):
             X_init = latin_hypercube(self.n_init, self.dim)
             X_init = from_unit_cube(X_init, self.lb, self.ub)
             fX_init = np.array([[self.f(x)] for x in X_init])
+            cX_init = np.array([self.f.get_res(x) for x in X_init])
 
             # Update budget and set as initial data for this TR
             self.X = np.vstack((self.X, X_init))
             self.fX = np.vstack((self.fX, fX_init))
+            self.cX = np.vstack((self.cX, cX_init))
             self._idx = np.vstack((self._idx, i * np.ones((self.n_init, 1), dtype=int)))
             self.n_evals += self.n_init
 
@@ -163,11 +194,12 @@ class TurboM(Turbo1):
                 sys.stdout.flush()
 
         # Thompson sample to get next suggestions
-        while (self.n_evals < self.max_evals) and self._constraints_check():
+        while (self.n_evals < self.max_evals) and self._cum_constraints_check():
 
             # Generate candidates from each TR
             X_cand = np.zeros((self.n_trust_regions, self.n_cand, self.dim))
             y_cand = np.inf * np.ones((self.n_trust_regions, self.n_cand, self.batch_size))
+            cs_cand = np.inf * np.ones((self.n_trust_regions, self.n_cand, self.batch_size, len(self.cs)))
             
             for i in range(self.n_trust_regions):
                 idx = np.where(self._idx == i)[0]  # Extract all "active" indices
@@ -178,17 +210,18 @@ class TurboM(Turbo1):
 
                 # Get the values from the standardized data
                 fX = deepcopy(self.fX[idx, 0].ravel())
+                cX = deepcopy(self.cX[idx, :])
 
                 # Don't retrain the model if the training data hasn't changed
                 n_training_steps = 0 if self.hypers[i] else self.n_training_steps
 
                 # Create new candidates
-                X_cand[i, :, :], y_cand[i, :, :], self.hypers[i] = self._create_candidates(
-                    X, fX, length=self.length[i], n_training_steps=n_training_steps, hypers=self.hypers[i]
+                X_cand[i, :, :], y_cand[i, :, :], cs_cand[i, :, :, :], self.hypers[i] = self._create_candidates(
+                    X, fX, cX, length=self.length[i], n_training_steps=n_training_steps, hypers=self.hypers[i]
                 )
 
             # Select the next candidates
-            X_next, idx_next = self._select_candidates(X_cand, y_cand)
+            X_next, idx_next = self._select_candidates(X_cand, y_cand, cs_cand)
             assert X_next.min() >= 0.0 and X_next.max() <= 1.0
 
             # Undo the warping
@@ -198,7 +231,8 @@ class TurboM(Turbo1):
             # Evaluate batch
             fX_next = np.array(evaluations)
                             
-            resources = [[self.f.get_res(x)] for x in X_next]
+            resources = [self.f.get_res(x) for x in X_next]
+            cX_next = np.array(resources)
             # Get resources used
             self._add_resources(resources)
 
@@ -219,10 +253,11 @@ class TurboM(Turbo1):
             self.n_evals += self.batch_size
             self.X = np.vstack((self.X, deepcopy(X_next)))
             self.fX = np.vstack((self.fX, deepcopy(fX_next)))
+            self.cX = np.vstack((self.cX, deepcopy(cX_next)))
             self._idx = np.vstack((self._idx, deepcopy(idx_next)))
 
             # Check if any TR needs to be restarted
-            if self._constraints_check():
+            if self._cum_constraints_check():
                 for i in range(self.n_trust_regions):
                     if self.length[i] < self.length_min:  # Restart trust region if converged
                         idx_i = self._idx[:, 0] == i
@@ -243,6 +278,7 @@ class TurboM(Turbo1):
                         X_init = latin_hypercube(self.n_init, self.dim)
                         X_init = from_unit_cube(X_init, self.lb, self.ub)
                         fX_init = np.array([[self.f(x)] for x in X_init])
+                        cX_init = np.array([self.f.get_res(x) for x in X_init])
 
                         # Print progress
                         if self.verbose:
@@ -253,5 +289,6 @@ class TurboM(Turbo1):
                         # Append data to local history
                         self.X = np.vstack((self.X, X_init))
                         self.fX = np.vstack((self.fX, fX_init))
+                        self.cX = np.vstack((self.cX, cX_init))
                         self._idx = np.vstack((self._idx, i * np.ones((self.n_init, 1), dtype=int)))
                         self.n_evals += self.n_init

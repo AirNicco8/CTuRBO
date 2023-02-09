@@ -167,12 +167,15 @@ class Turbo1:
         return (self.currTime < self.tcs[0] and self.currMem < self.tcs[1])
 
     def _constraints_violation(self, estimates):
-        tmp=np.zeros(estimates.shape[0])
+        tmp = np.zeros(estimates.shape[0])
+        
         for i in self.cs_range:
-            np.hstack((tmp,self.cs[i] - estimates[:,i]))
+            violations = self.cs[i] - estimates[:,i]
+            violations[violations > 0] = 0.0
+            
+            tmp = np.vstack((tmp, violations))
 
-        print(np.sum(tmp, axis=0).shape)
-        return 0
+        return np.sum(tmp, axis=0)
 
     def _add_resources(self, v):
         for el in v:
@@ -235,6 +238,8 @@ class Turbo1:
         # GPs for constraints
         cgps = [0]*len(self.cs)
         c_hypers = [0]*len(self.cs)
+        # print(cX.shape)
+        # print(cX[:,0].shape)
         for i in self.cs_range:
             with gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
                 cgps[i] = train_gp(
@@ -302,36 +307,43 @@ class Turbo1:
         # Remove the torch variables
         del X_torch, y_torch, X_cand_torch, gp, cgps
 
+        if bool(self.cs_range):
+            all_cs = cs_cand[0]
+
+            for i in self.cs_range[1:]:
+                all_cs = np.dstack((all_cs, cs_cand[i]))
+
         # De-standardize the sampled values
         y_cand = mu + sigma * y_cand
 
         # for i in self.cs_range:
         #     cs_cand[i] = mu_c[i] + sigma_c[i] * cs_cand[i]
 
-        return X_cand, y_cand, cs_cand, hypers
+        return X_cand, y_cand, all_cs, hypers
 
-    def _select_candidates(self, X_cand, y_cand, cs_cand):
+    def _select_candidates(self, X_cand, y_cand, c_cand):
         """Select candidates."""
         X_next = np.ones((self.batch_size, self.dim))
-
-        cs_cand = np.hstack((cs_cand[0], cs_cand[1]))
     
         for i in range(self.batch_size):
-            # Pick the best point and make sure we never pick it again
+            cs_cand = c_cand[:,i,:] # select the couple of constraints realization from the batch
             assert cs_cand.shape[0] == y_cand.shape[0]
 
-            satisfactions = [cs_cand[:,i]<self.cs[i] for i in self.cs_range]
-            cum_and = satisfactions[0]
-            for e in satisfactions[1:]:
-                cum_and = np.logical_and(cum_and, e)
+            satisfactions = [cs_cand[:,k]<self.cs[k] for k in self.cs_range]
 
-            if y_cand[:, i][cum_and].size: # set of candidates which respect the constraints is not empty
-                subset_idx = np.argmin(y_cand[:, i][cum_and])
-                indbest = np.arange(y_cand[:, i].shape[0])[cum_and][subset_idx]
-            else: # take minimum violation 
-                # (!!! TODO)
-                total_violations = self._constraints_violation(cs_cand)
-                print(total_violations.shape)
+            if bool(self.cs_range):
+                cum_and = satisfactions[0]
+                for e in satisfactions[1:]:
+                    cum_and = np.logical_and(cum_and, e)
+
+                if y_cand[:, i][cum_and].size: # set of candidates which respect the constraints is not empty
+                    subset_idx = np.argmin(y_cand[:, i][cum_and])
+                    indbest = np.arange(y_cand[:, i].shape[0])[cum_and][subset_idx]
+                else: # take minimum violation 
+                    total_violations = self._constraints_violation(cs_cand)
+                    indbest = np.argmax(total_violations)
+            else: # no constraints
+                indbest = np.argmin(y_cand[:, i])
 
             # pick the best value (min in realization) for each element of the batch (n_cand array)
             X_next[i, :] = deepcopy(X_cand[indbest, :]) # the related input X is the next value
@@ -414,7 +426,7 @@ class Turbo1:
                 self._cX = np.vstack((self._cX, cX_next))
                 # observations which will be used for the gaussian process, they increase each iteration
 
-                if self.verbose and fX_next.min() < self.fX.min():
+                if self.verbose and fX_next.min() < self.fX.min(): 
                     n_evals, fbest = self.n_evals, fX_next.min()
                     print(f"{n_evals}) New best: {fbest:.4}")
                     sys.stdout.flush()
