@@ -13,7 +13,7 @@ This repo employs the TuRBO code for the UniBo AITI exam project, which entails 
 
 The script `main.py` launches the TuRBO algorithm on Anticipate dataset, to set the time and memory constraints they can be passed as arguments from the terminal as in this example:
    ```shell
-   python main.py --max_time 150 --max_memory 200 --trust_regions 2
+   python main.py --max_time 150 --max_mem 200 --trust_regions 2
    ```
  The time is intended in seconds, the memory is intended in Mega Bytes. There is also the possibility to choose the number of trust regions mantained by TuRBO. For other arguments customization run:
    ```shell
