@@ -66,6 +66,7 @@ class Turbo1:
         min_cuda=1024,
         device="cpu",
         dtype="float64",
+        gp_dict=None
     ):
 
         # Very basic input checks
@@ -151,6 +152,7 @@ class Turbo1:
         if self.verbose:
             print("Using dtype = %s \nUsing device = %s" % (self.dtype, self.device))
             sys.stdout.flush()
+        self.gp_dict = gp_dict
 
         # Initialize parameters
         self._restart()
@@ -229,7 +231,7 @@ class Turbo1:
             X_torch = torch.tensor(X).to(device=device, dtype=dtype)
             y_torch = torch.tensor(fX).to(device=device, dtype=dtype)
             gp = train_gp(
-                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, hypers=hypers # surrogate GP
+                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, state_dict=self.gp_dict['obj'], hypers=hypers # surrogate GP
             )
 
             # Save state dict
@@ -243,7 +245,8 @@ class Turbo1:
         for i in self.cs_range:
             with gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
                 cgps[i] = train_gp(
-                    train_x=X_torch, train_y=torch.tensor(cX[:,i]).to(device=device, dtype=dtype), use_ard=self.use_ard, num_steps=n_training_steps, hypers=hypers # surrogate GP
+                    train_x=X_torch, train_y=torch.tensor(cX[:,i]).to(device=device, dtype=dtype), use_ard=self.use_ard, num_steps=n_training_steps,
+                     state_dict=self.gp_dict['cons_{}'.format(i)], hypers=hypers # surrogate GP
                 )
 
                 # Save state dict

@@ -38,7 +38,7 @@ class GP(ExactGP):
         return MultivariateNormal(mean_x, covar_x)
 
 
-def train_gp(train_x, train_y, use_ard, num_steps, hypers={}):
+def train_gp(train_x, train_y, use_ard, num_steps, state_dict, hypers={}):
     """Fit a GP model where train_x is in [0, 1]^d and train_y is standardized."""
     assert train_x.ndim == 2
     assert train_y.ndim == 1
@@ -63,6 +63,9 @@ def train_gp(train_x, train_y, use_ard, num_steps, hypers={}):
         outputscale_constraint=outputscale_constraint,
         ard_dims=ard_dims,
     ).to(device=train_x.device, dtype=train_x.dtype)
+
+    if state_dict is not None:
+        model.load_state_dict(state_dict)
 
     # Find optimal model hyperparameters
     model.train()
