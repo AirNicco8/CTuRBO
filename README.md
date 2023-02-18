@@ -6,20 +6,20 @@ Note that TuRBO is a **minimization** algorithm, so please make sure you reformu
 
 ## Differences
 
-This repo employs the TuRBO code for the UniBo AITI exam project, which entails using Bayesian Optimization for Vertical Matchmaking. In particular this code gives the possibility to launch the algorithm with bounded time and/or space constraints.
+This repo employs the TuRBO code for the UniBo AITI exam project, which entails using Bayesian Optimization for Vertical Matchmaking. In particular this code gives the possibility to launch the algorithm with bounded time and/or space constraints. The implementation is based on ***Scalable Constrained Bayesian Optimization***, a constrained verison of TuRBO published by the same author.
 
 ## Usage
 **Disclaimer**: this is an alpha version which uses the data from the csv dataset and does not actually computes the function which should be optimized
 
 The script `main.py` launches the TuRBO algorithm on Anticipate dataset, to set the time and memory constraints they can be passed as arguments from the terminal as in this example:
    ```shell
-   python main.py  --max_time 5000 --max_memory 4000 --trust_regions 2
+   python main.py --max_time 150 --max_mem 200 --trust_regions 2
    ```
- The time is intended in seconds, the memory is intended in Mega Bytes. There is also the possibility to choose the number of trust regions mantained by TuRBO.
-
-## Examples
-Check the examples folder for two examples on how to use Turbo-1 and Turbo-n.
-
+ The time is intended in seconds, the memory is intended in Mega Bytes. There is also the possibility to choose the number of trust regions mantained by TuRBO. For other arguments customization run:
+   ```shell
+   python main.py -h
+   ```
+   
 ## Citing the original authors
 
 The final version of the paper is available at: http://papers.nips.cc/paper/8788-scalable-global-optimization-via-local-bayesian-optimization.
