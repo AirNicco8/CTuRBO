@@ -38,7 +38,7 @@ class GP(ExactGP):
         return MultivariateNormal(mean_x, covar_x)
 
 
-def train_gp(train_x, train_y, use_ard, num_steps, state_dict, hypers={}):
+def train_gp(train_x, train_y, use_ard, num_steps, state_dict, freeze, hypers={}):
     """Fit a GP model where train_x is in [0, 1]^d and train_y is standardized."""
     assert train_x.ndim == 2
     assert train_y.ndim == 1
@@ -67,32 +67,33 @@ def train_gp(train_x, train_y, use_ard, num_steps, state_dict, hypers={}):
     if state_dict is not None:
         model.load_state_dict(state_dict)
 
-    # Find optimal model hyperparameters
-    model.train()
-    likelihood.train()
+    if not freeze:
+        # Find optimal model hyperparameters
+        model.train()
+        likelihood.train()
 
-    # "Loss" for GPs - the marginal log likelihood
-    mll = ExactMarginalLogLikelihood(likelihood, model)
+        # "Loss" for GPs - the marginal log likelihood
+        mll = ExactMarginalLogLikelihood(likelihood, model)
 
-    # Initialize model hypers
-    if hypers:
-        model.load_state_dict(hypers)
-    else:
-        hypers = {}
-        hypers["covar_module.outputscale"] = 1.0
-        hypers["covar_module.base_kernel.lengthscale"] = 0.5
-        hypers["likelihood.noise"] = 0.005
-        model.initialize(**hypers)
+        # Initialize model hypers
+        if hypers:
+            model.load_state_dict(hypers)
+        else:
+            hypers = {}
+            hypers["covar_module.outputscale"] = 1.0
+            hypers["covar_module.base_kernel.lengthscale"] = 0.5
+            hypers["likelihood.noise"] = 0.005
+            model.initialize(**hypers)
 
-    # Use the adam optimizer
-    optimizer = torch.optim.Adam([{"params": model.parameters()}], lr=0.1)
+        # Use the adam optimizer
+        optimizer = torch.optim.Adam([{"params": model.parameters()}], lr=0.1)
 
-    for _ in range(num_steps):
-        optimizer.zero_grad()
-        output = model(train_x)
-        loss = -mll(output, train_y)
-        loss.backward()
-        optimizer.step()
+        for _ in range(num_steps):
+            optimizer.zero_grad()
+            output = model(train_x)
+            loss = -mll(output, train_y)
+            loss.backward()
+            optimizer.step()
 
     # Switch to eval mode
     model.eval()

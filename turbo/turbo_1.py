@@ -56,6 +56,8 @@ class Turbo1:
         cs,
         lb,
         ub,
+        olb,
+        oub,
         n_init,
         max_evals,
         batch_size=1,
@@ -66,7 +68,8 @@ class Turbo1:
         min_cuda=1024,
         device="cpu",
         dtype="float64",
-        gp_dict=None
+        gp_dict=None,
+        freeze_flag=False
     ):
 
         # Very basic input checks
@@ -106,9 +109,11 @@ class Turbo1:
 
         self.cs_range = range(len(self.cs))
 
-        self.dim = len(lb)
+        self.dim = self.f.dim
         self.lb = lb
         self.ub = ub
+        self.olb = olb
+        self.oub = oub
 
         # Constrained resources
         self.currTime = 0
@@ -153,6 +158,7 @@ class Turbo1:
             print("Using dtype = %s \nUsing device = %s" % (self.dtype, self.device))
             sys.stdout.flush()
         self.gp_dict = gp_dict
+        self.freeze_flag = freeze_flag
 
         # Initialize parameters
         self._restart()
@@ -184,6 +190,44 @@ class Turbo1:
             self.currTime+= el[0]
             self.currMem+= el[1]
 
+    def _constraints_violation_m(self, estimates):
+        tmp = np.zeros((estimates.shape[0],estimates.shape[1]))
+        
+        for i in self.cs_range:
+            violations = self.cs[i] - estimates[:, :, i]
+            violations[violations > 0] = 0.0
+            
+            tmp = np.dstack((tmp, violations))
+        return np.sum(tmp, axis=2)
+
+    def _constraints_violation(self, estimates):
+        tmp = np.zeros(estimates.shape[0])
+
+        for i in self.cs_range:
+            violations = self.cs[i] - estimates[:, i]
+            violations[violations > 0] = 0.0
+            tmp = np.dstack((tmp, violations))
+
+        return np.sum(tmp, axis=2).T
+
+    def _get_best_feasible(self, cX, fX):
+        satisfactions = [cX[:,i] < self.cs[i] for i in self.cs_range]
+        cum_and = np.isfinite(fX).ravel()
+        for e in satisfactions:
+            cum_and = np.logical_and(cum_and, e)
+
+        if fX[cum_and].size:
+            subset_idx = np.argmin(fX[cum_and])
+            ind_best = np.arange(fX.size)[cum_and.ravel()][subset_idx]
+        else: # take minimum violation 
+            total_violations = -(self._constraints_violation(cX))
+            mask = np.isfinite(fX)
+
+            subset_idx = np.argmin(total_violations[mask])
+            ind_best = np.arange(fX.size)[mask.ravel()][subset_idx]
+        
+        return ind_best
+
     def _adjust_length(self, fX_next):
         if np.min(fX_next) < np.min(self._fX) - 1e-3 * math.fabs(np.min(self._fX)):
             self.succcount += 1
@@ -199,17 +243,23 @@ class Turbo1:
             self.length /= 2.0
             self.failcount = 0
 
-    def _create_candidates(self, X, fX, cX, length, n_training_steps, hypers):
+    def _create_candidates(self, X, fX, cX, length, n_training_steps, hypers, fixed):
         """Generate candidates assuming X has been scaled to [0,1]^d."""
         # Pick the center as the point with the smallest function values
         # NOTE: This may not be robust to noise, in which case the posterior mean of the GP can be used instead
         assert X.min() >= 0.0 and X.max() <= 1.0
 
+        # add fixed instance if needed
+        X_fix = -1
+        if fixed != -1:
+            X_fix = np.array([[fixed] for _ in range(len(X))])
+            X_fix = to_unit_cube(X_fix, self.olb, self.oub)
+            X_fix = np.dstack((X.ravel(), X_fix.ravel()))[0]
+
         # Standardize function values.
         mu, sigma = np.median(fX), fX.std()
         sigma = 1.0 if sigma < 1e-6 else sigma
         fX = (deepcopy(fX) - mu) / sigma
-
 
         # Standardize constraints (?) values.
         # mu_c = [0]*len(self.cs)
@@ -228,10 +278,14 @@ class Turbo1:
         # We use CG + Lanczos for training if we have enough data
         # GP for objective
         with gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
-            X_torch = torch.tensor(X).to(device=device, dtype=dtype)
+            if not isinstance(X_fix, int):
+                X_torch = torch.tensor(X_fix).to(device=device, dtype=dtype)
+            else:
+                X_torch = torch.tensor(X).to(device=device, dtype=dtype)
             y_torch = torch.tensor(fX).to(device=device, dtype=dtype)
             gp = train_gp(
-                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, state_dict=self.gp_dict['obj'], hypers=hypers # surrogate GP
+                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, state_dict=self.gp_dict['obj'],
+                freeze=self.freeze_flag, hypers=hypers # surrogate GP
             )
 
             # Save state dict
@@ -246,14 +300,24 @@ class Turbo1:
             with gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
                 cgps[i] = train_gp(
                     train_x=X_torch, train_y=torch.tensor(cX[:,i]).to(device=device, dtype=dtype), use_ard=self.use_ard, num_steps=n_training_steps,
-                     state_dict=self.gp_dict['cons_{}'.format(i)], hypers=hypers # surrogate GP
+                     state_dict=self.gp_dict['cons_{}'.format(i)], freeze=self.freeze_flag, hypers=hypers # surrogate GP
                 )
 
                 # Save state dict
                 c_hypers[i] = cgps[i].state_dict()
 
         # Create the trust region boundaries
-        x_center = X[fX.argmin().item(), :][None, :] # best solution found so far
+        # satisfactions = [cX[:,i] < self.cs[i] for i in self.cs_range]
+        # cum_and = np.isfinite(fX).ravel()
+        # for e in satisfactions:
+        #     cum_and = np.logical_and(cum_and, e)
+
+        # subset_idx = np.argmin(fX[cum_and])
+        # ind_best = np.arange(fX.size)[cum_and.ravel()][subset_idx]
+
+        ind_best = self._get_best_feasible(cX, fX)
+
+        x_center = X[ind_best, :][None, :] # best feasible solution found so far
         # ndim coordinates
 
         weights = gp.covar_module.base_kernel.lengthscale.cpu().detach().numpy().ravel()
@@ -266,6 +330,11 @@ class Turbo1:
         seed = np.random.randint(int(1e6))
         sobol = SobolEngine(self.dim, scramble=True, seed=seed)
         pert = sobol.draw(self.n_cand).to(dtype=dtype, device=device).cpu().detach().numpy()
+
+        if fixed != -1:
+            ub = np.array([ub[:,0]])
+            lb = np.array([lb[:,0]])
+
         pert = lb + (ub - lb) * pert
 
         # Create a perturbation mask
@@ -292,10 +361,19 @@ class Turbo1:
         for i in self.cs_range:
             cgps[i] = cgps[i].to(dtype=dtype, device=device)
 
+        # add fixed instance if needed
+        if fixed != -1:
+            X_fix = np.array([[fixed] for _ in range(len(X_cand))])
+            X_fix = to_unit_cube(X_fix, self.olb, self.oub)
+            X_fix = np.dstack((X_cand.ravel(), X_fix.ravel()))[0]
+
         # We use Lanczos for sampling if we have enough data
         cs_cand=[0]*len(self.cs)
         with torch.no_grad(), gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
-            X_cand_torch = torch.tensor(X_cand).to(device=device, dtype=dtype)
+            if fixed != -1:
+                X_cand_torch = torch.tensor(X_fix).to(device=device, dtype=dtype)
+            else:
+                X_cand_torch = torch.tensor(X_cand).to(device=device, dtype=dtype)
             # X_cand shape is n_cand(dim*100) x dim
 
             # Thompson Sampling (TS)
@@ -357,7 +435,8 @@ class Turbo1:
         """Run the full optimization process."""
         while (self.n_evals < self.max_evals) and self._cum_constraints_check():
             if len(self._fX) > 0 and self.verbose:
-                n_evals, fbest = self.n_evals, self._fX.min()
+                ind_best = self._get_best_feasible(self._cX, self._fX)
+                n_evals, fbest = self.n_evals, self._fX[ind_best, :].item() #self._fX.min()
                 print(f"{n_evals}) Restarting with fbest = {fbest:.4}")
                 sys.stdout.flush()
 
@@ -366,9 +445,9 @@ class Turbo1:
 
             # Generate and evalute initial design points
             X_init = latin_hypercube(self.n_init, self.dim) # sample n_init x dim points using LHS, gives values in [0,1]
-            X_init = from_unit_cube(X_init, self.lb, self.ub) # normalize samples from [0,1] into [lb, ub]7
+            X_init = from_unit_cube(X_init, self.lb, self.ub) # normalize samples from [0,1] into [lb, ub]
             X_init = X_init.astype(int)
-            fX_init = np.array([[self.f(x)] for x in X_init]) # evaluate samples with objective f
+            fX_init = np.array([self.f(x) for x in X_init]) # evaluate samples with objective f
             cX_init = np.array([self.f.get_res(x) for x in X_init]) # evaluate samples with constraints 
 
 
@@ -384,8 +463,10 @@ class Turbo1:
             self.cX = np.vstack((self.cX, deepcopy(cX_init)))
 
             if self.verbose:
-                fbest = self._fX.min()
-                print(f"Starting from fbest = {fbest:.4}")
+                #fbest = self._fX.min()
+                ind_best = self._get_best_feasible(self._cX, self._fX)
+                fbest = self._fX[ind_best, :].item()
+                print(f"Starting from feasible best = {fbest:.4}")
                 sys.stdout.flush()
 
             # Thompson sample to get next suggestions
@@ -408,7 +489,7 @@ class Turbo1:
                 # Undo the warping
                 X_next = from_unit_cube(X_next, self.lb, self.ub)
 
-                evaluations = [[self.f(x)] for x in X_next]
+                evaluations = [self.f(x) for x in X_next]
                 # Evaluate batch
                 fX_next = np.array(evaluations)
                                 
@@ -429,9 +510,20 @@ class Turbo1:
                 self._cX = np.vstack((self._cX, cX_next))
                 # observations which will be used for the gaussian process, they increase each iteration
 
-                if self.verbose and fX_next.min() < self.fX.min(): 
-                    n_evals, fbest = self.n_evals, fX_next.min()
-                    print(f"{n_evals}) New best: {fbest:.4}")
+                ind_best = self._get_best_feasible(self.cX, self.fX)
+                fbest = self.fX[ind_best, :].item()
+
+                try:
+                    next_ind_best = self._get_best_feasible(cX_next, fX_next)
+                    nextbest = self.fX[next_ind_best, :].item()
+                except:
+                    nextbest = np.inf
+
+                # if self.verbose and fX_next.min() < self.fX.min(): 
+                #     n_evals, fbest = self.n_evals, fX_next.min()
+                if self.verbose and nextbest < fbest: 
+                    n_evals = self.n_evals
+                    print(f"{n_evals}) New best feasible: {nextbest:.4}")
                     sys.stdout.flush()
 
                 # Append data to the global history

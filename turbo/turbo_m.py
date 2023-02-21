@@ -56,6 +56,8 @@ class TurboM(Turbo1):
         cs,
         lb,
         ub,
+        olb,
+        oub,
         n_init,
         max_evals,
         n_trust_regions,
@@ -68,6 +70,7 @@ class TurboM(Turbo1):
         device="cpu",
         dtype="float64",
         gp_dict=None,
+        freeze_flag=False
     ):
         self.n_trust_regions = n_trust_regions
         super().__init__(
@@ -76,6 +79,8 @@ class TurboM(Turbo1):
             cs=cs,
             lb=lb,
             ub=ub,
+            olb=olb,
+            oub=oub,
             n_init=n_init,
             max_evals=max_evals,
             batch_size=batch_size,
@@ -86,7 +91,8 @@ class TurboM(Turbo1):
             min_cuda=min_cuda,
             device=device,
             dtype=dtype,
-            gp_dict=gp_dict
+            gp_dict=gp_dict,
+            freeze_flag = freeze_flag
         )
 
         self.succtol = 3
@@ -102,16 +108,6 @@ class TurboM(Turbo1):
 
         # Initialize parameters
         self._restart()
-
-    def _constraints_violation(self, estimates):
-        tmp = np.zeros((estimates.shape[0],estimates.shape[1]))
-        
-        for i in self.cs_range:
-            violations = self.cs[i] - estimates[:, :, i]
-            violations[violations > 0] = 0.0
-            
-            tmp = np.dstack((tmp, violations))
-        return np.sum(tmp, axis=2)
 
     def _restart(self):
         self._idx = np.zeros((0, 1), dtype=int)  # Track what trust region proposed what using an index vector
@@ -159,7 +155,7 @@ class TurboM(Turbo1):
                 subset_idx = np.argmin(y_cand[:, :, k][cum_and])
                 indbest = np.arange(y_cand[:, :, k].size)[cum_and.ravel()][subset_idx]
             else: # take minimum violation 
-                total_violations = -(self._constraints_violation(cs_cand))
+                total_violations = -(self._constraints_violation_m(cs_cand))
                 mask = np.isfinite(y_cand[:, :, k])
                 subset_idx = np.argmin(total_violations[mask])
                 indbest = np.arange(y_cand[:, :, k].size)[mask.ravel()][subset_idx]
@@ -178,10 +174,11 @@ class TurboM(Turbo1):
         """Run the full optimization process."""
         # Create initial points for each TR
         for i in range(self.n_trust_regions):
-            X_init = latin_hypercube(self.n_init, self.dim)
+            X_init = latin_hypercube(self.n_init, self.dim) # first points initialization 
             X_init = from_unit_cube(X_init, self.lb, self.ub)
-            fX_init = np.array([self.f(x) for x in X_init])
-            cX_init = np.array([self.f.get_res(x) for x in X_init])
+            #X_init[:,1] = np.array([self.f.get_instance(x) for x in X_init]).ravel() map split instance to whole dataset index
+            fX_init = np.array([self.f(x) for x in X_init]) # objective function evaluations for initial points
+            cX_init = np.array([self.f.get_res(x) for x in X_init]) # resource functions evaluations for initial points
 
             # Update budget and set as initial data for this TR
             self.X = np.vstack((self.X, X_init))
@@ -191,7 +188,9 @@ class TurboM(Turbo1):
             self.n_evals += self.n_init
 
             if self.verbose:
-                fbest = fX_init.min()
+                ind_best = self._get_best_feasible(cX_init, fX_init)
+                fbest = fX_init[ind_best, :].item()
+
                 print(f"TR-{i} starting from: {fbest:.4}")
                 sys.stdout.flush()
 
@@ -219,7 +218,7 @@ class TurboM(Turbo1):
 
                 # Create new candidates
                 X_cand[i, :, :], y_cand[i, :, :], cs_cand[i, :, :, :], self.hypers[i] = self._create_candidates(
-                    X, fX, cX, length=self.length[i], n_training_steps=n_training_steps, hypers=self.hypers[i]
+                    X, fX, cX, length=self.length[i], n_training_steps=n_training_steps, hypers=self.hypers[i], fixed=self.f.inst
                 )
 
             # Select the next candidates
@@ -244,10 +243,22 @@ class TurboM(Turbo1):
                 if len(idx_i) > 0:
                     self.hypers[i] = {}  # Remove model hypers
                     fX_i = fX_next[idx_i]
+                    cX_i = cX_next[idx_i]
 
-                    if self.verbose and fX_i.min() < self.fX.min() - 1e-3 * math.fabs(self.fX.min()):
-                        n_evals, fbest = self.n_evals, fX_i.min()
-                        print(f"{n_evals}) New best @ TR-{i}: {fbest:.4}")
+                    ind_best = self._get_best_feasible(self.cX, self.fX)
+                    fbest = self.fX[ind_best, :].item()
+
+                    try:
+                        next_ind_best = self._get_best_feasible(cX_i, fX_i)
+                        nextbest = fX_i[next_ind_best, :].item()
+                    except:
+                        nextbest = np.inf
+
+                    # if self.verbose and fX_i.min() < self.fX.min() - 1e-3 * math.fabs(self.fX.min()):
+                    #     n_evals, fbest = self.n_evals, fX_i.min()
+                    if self.verbose and nextbest < fbest - 1e-3 * math.fabs(fbest):
+                        n_evals = self.n_evals
+                        print(f"{n_evals}) New feasible best @ TR-{i}: {fbest:.4}")
                         sys.stdout.flush()
                     self._adjust_length(fX_i, i)
 
@@ -265,8 +276,11 @@ class TurboM(Turbo1):
                         idx_i = self._idx[:, 0] == i
 
                         if self.verbose:
-                            n_evals, fbest = self.n_evals, self.fX[idx_i, 0].min()
-                            print(f"{n_evals}) TR-{i} converged to: : {fbest:.4}")
+                            ind_best = self._get_best_feasible(self.cX[idx_i, :], self.fX[idx_i, 0])
+                            fbest = self.fX[idx_i, 0][ind_best].item()
+                            n_evals = self.n_evals
+                            #n_evals, fbest = self.n_evals, self.fX[idx_i, 0].min()
+                            print(f"{n_evals}) TR-{i} converged to: {fbest:.4}")
                             sys.stdout.flush()
 
                         # Reset length and counters, remove old data from trust region
@@ -284,8 +298,11 @@ class TurboM(Turbo1):
 
                         # Print progress
                         if self.verbose:
-                            n_evals, fbest = self.n_evals, fX_init.min()
-                            print(f"{n_evals}) TR-{i} is restarting from: : {fbest:.4}")
+                            ind_best = self._get_best_feasible(cX_init, fX_init)
+                            fbest = fX_init[ind_best, :].item()
+                            n_evals = self.n_evals
+                            #n_evals, fbest = self.n_evals, fX_init.min()
+                            print(f"{n_evals}) TR-{i} is restarting from: {fbest:.4}")
                             sys.stdout.flush()
 
                         # Append data to local history

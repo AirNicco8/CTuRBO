@@ -1,2 +1,3 @@
 datasets/*
 datasets_splits/*
+*/__pycache/*
