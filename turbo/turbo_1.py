@@ -19,7 +19,7 @@ import torch
 from torch.quasirandom import SobolEngine
 
 from .gp import train_gp
-from .utils import from_unit_cube, latin_hypercube, to_unit_cube
+from .utils import from_unit_cube, latin_hypercube, to_unit_cube, gaussian_copula
 
 
 class Turbo1:
@@ -69,7 +69,8 @@ class Turbo1:
         device="cpu",
         dtype="float64",
         gp_dict=None,
-        freeze_flag=False
+        freeze_flag=False,
+        transform_flag=False
     ):
 
         # Very basic input checks
@@ -159,6 +160,7 @@ class Turbo1:
             sys.stdout.flush()
         self.gp_dict = gp_dict
         self.freeze_flag = freeze_flag
+        self.transform_flag = transform_flag
 
         # Initialize parameters
         self._restart()
@@ -261,6 +263,13 @@ class Turbo1:
         sigma = 1.0 if sigma < 1e-6 else sigma
         fX = (deepcopy(fX) - mu) / sigma
 
+        if self.transform_flag:
+            for i in self.cs_range:
+                k = self.cs[i]
+                if k == np.inf: k = 0
+                cX[:,i] = np.sign(cX[:,i] - k) * np.log(1 + np.absolute(cX[:,i] - k)) + k
+            fX = gaussian_copula(fX)
+
         # Standardize constraints (?) values.
         # mu_c = [0]*len(self.cs)
         # sigma_c = [0]*len(self.cs)
@@ -284,8 +293,8 @@ class Turbo1:
                 X_torch = torch.tensor(X).to(device=device, dtype=dtype)
             y_torch = torch.tensor(fX).to(device=device, dtype=dtype)
             gp = train_gp(
-                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, state_dict=self.gp_dict['obj'],
-                freeze=self.freeze_flag, hypers=hypers # surrogate GP
+                train_x=X_torch, train_y=y_torch, use_ard=self.use_ard, num_steps=n_training_steps, state_dict=self.gp_dict, 
+                dict_key = 'obj', freeze=self.freeze_flag, hypers=hypers # surrogate GP
             )
 
             # Save state dict
@@ -294,13 +303,12 @@ class Turbo1:
         # GPs for constraints
         cgps = [0]*len(self.cs)
         c_hypers = [0]*len(self.cs)
-        # print(cX.shape)
-        # print(cX[:,0].shape)
+
         for i in self.cs_range:
             with gpytorch.settings.max_cholesky_size(self.max_cholesky_size):
                 cgps[i] = train_gp(
                     train_x=X_torch, train_y=torch.tensor(cX[:,i]).to(device=device, dtype=dtype), use_ard=self.use_ard, num_steps=n_training_steps,
-                     state_dict=self.gp_dict['cons_{}'.format(i)], freeze=self.freeze_flag, hypers=hypers # surrogate GP
+                     state_dict=self.gp_dict, dict_key = 'cons_{}'.format(i), freeze=self.freeze_flag, hypers=hypers # surrogate GP
                 )
 
                 # Save state dict
@@ -480,7 +488,7 @@ class Turbo1:
 
                 # Create the next batch
                 X_cand, y_cand, cs_cand, _ = self._create_candidates(
-                    X, fX, cX, length=self.length, n_training_steps=self.n_training_steps, hypers={}
+                    X, fX, cX, length=self.length, n_training_steps=self.n_training_steps, hypers={}, fixed=self.f.inst
                 )
 
                 X_next = self._select_candidates(X_cand, y_cand, cs_cand)
@@ -522,8 +530,8 @@ class Turbo1:
                 # if self.verbose and fX_next.min() < self.fX.min(): 
                 #     n_evals, fbest = self.n_evals, fX_next.min()
                 if self.verbose and nextbest < fbest: 
-                    n_evals = self.n_evals
-                    print(f"{n_evals}) New best feasible: {nextbest:.4}")
+                    n_evals, fbest = self.n_evals, nextbest
+                    print(f"{n_evals}) New best feasible: {fbest:.4}")
                     sys.stdout.flush()
 
                 # Append data to the global history

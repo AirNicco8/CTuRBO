@@ -10,7 +10,21 @@
 ###############################################################################
 
 import numpy as np
+from scipy.stats import norm
 
+def gaussian_copula(fX):
+    obs_sorted = np.sort(fX)
+    
+    # Map observations to quantiles
+    quantiles = np.linspace(0.01, 1, len(obs_sorted))
+    empirical_cdf = dict(zip(obs_sorted, quantiles))
+    rank = np.array([empirical_cdf[x] for x in fX])
+    quantiles = rank / len(obs_sorted)
+    
+    # Apply inverse Gaussian CDF
+    ret = np.array(norm.ppf(quantiles))
+    
+    return ret
 
 def to_unit_cube(x, lb, ub):
     """Project to [0, 1]^d from hypercube with bounds lb and ub"""

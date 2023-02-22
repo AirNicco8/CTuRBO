@@ -151,17 +151,23 @@ if __name__== "__main__":
     obj_name = 'objective_state_raw.pth'
     transf = 'raw'
 
+    cs=[args.max_time, args.max_mem]
+
     gp_dict=None
     if args.load_gp:
-        if args.transform: # usa transformations
-                obj_name = 'objective_state_transformed.pth'
+        if args.transform: # use transformations on observed values
+                obj_name = 'objective_state_transformed_t{}_m{}.pth'.format(cs[0], cs[1])
                 transf = 'transformed'
 
         print('Loading {} trained GPs - path: {}'.format(transf, base_path+dataset_name+dir_name))
         gp_dict={}
         gp_dict['obj'] = torch.load(base_path+dataset_name+dir_name+obj_name)
         for i in range(2):
-            gp_dict['cons_{}'.format(i)] = torch.load(base_path+dataset_name+dir_name+'cons_{}_state_{}.pth'.format(i, transf))
+            if not args.transform:
+                name = 'cons_{}_state_{}.pth'.format(i, transf)
+            else:
+                name = 'cons_{}_state_{}_t{}_m{}.pth'.format(i, transf,cs[0], cs[1])
+            gp_dict['cons_{}'.format(i)] = torch.load(base_path+dataset_name+dir_name+name)
  
     if args.fix_instance == -1:
         df = pd.read_csv('datasets/'+df_name) # always run the algorithm on the full dataset
@@ -175,7 +181,7 @@ if __name__== "__main__":
         turbo = Turbo1(
             f=f,  # Handle to objective function
             tcs=[args.cum_time, args.cum_mem], 
-            cs=[args.max_time, args.max_mem], # solution constraint
+            cs=cs, # solution constraint
             lb=f.lb,  # Numpy array specifying input lower bounds
             ub=f.ub,  # Numpy array specifying input upper bounds
             olb=f.olb,  # Numpy array specifying input lower bounds
@@ -191,13 +197,14 @@ if __name__== "__main__":
             device="cpu",  # "cpu" or "cuda"
             dtype="float64",  # float64 or float32
             gp_dict=gp_dict, # gp state dict if we load trained gp
-            freeze_flag=args.freeze_gp # flag to freeze the gps 
+            freeze_flag=args.freeze_gp, # flag to freeze the gps 
+            transform_flag=args.transform # flag to transform observations
         )
     else:
       turbo = TurboM(
         f=f,  # Handle to objective function
         tcs=[args.cum_time, args.cum_mem], 
-        cs=[args.max_time, args.max_mem], # solution constraint
+        cs=cs, # solution constraint
         lb=f.lb,  # Numpy array specifying lower bounds
         ub=f.ub,  # Numpy array specifying upper bounds
         olb=f.olb,  # Numpy array specifying lower bounds
@@ -214,7 +221,8 @@ if __name__== "__main__":
         device="cpu",  # "cpu" or "cuda"
         dtype="float64",  # float64 or float32
         gp_dict=gp_dict, # gp state dict if we load trained gp
-        freeze_flag=args.freeze_gp
+        freeze_flag=args.freeze_gp,
+        transform_flag=args.transform # flag to transform observations
         )
 
     turbo.optimize()

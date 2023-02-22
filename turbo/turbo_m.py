@@ -70,7 +70,8 @@ class TurboM(Turbo1):
         device="cpu",
         dtype="float64",
         gp_dict=None,
-        freeze_flag=False
+        freeze_flag=False,
+        transform_flag=False
     ):
         self.n_trust_regions = n_trust_regions
         super().__init__(
@@ -92,7 +93,8 @@ class TurboM(Turbo1):
             device=device,
             dtype=dtype,
             gp_dict=gp_dict,
-            freeze_flag = freeze_flag
+            freeze_flag = freeze_flag,
+            transform_flag= transform_flag
         )
 
         self.succtol = 3
@@ -257,7 +259,7 @@ class TurboM(Turbo1):
                     # if self.verbose and fX_i.min() < self.fX.min() - 1e-3 * math.fabs(self.fX.min()):
                     #     n_evals, fbest = self.n_evals, fX_i.min()
                     if self.verbose and nextbest < fbest - 1e-3 * math.fabs(fbest):
-                        n_evals = self.n_evals
+                        n_evals, fbest = self.n_evals, nextbest
                         print(f"{n_evals}) New feasible best @ TR-{i}: {fbest:.4}")
                         sys.stdout.flush()
                     self._adjust_length(fX_i, i)
