@@ -113,15 +113,23 @@ def check_split(value):
         raise argparse.ArgumentTypeError("%s must be one of [20,30,40,100]" % value)
     return ivalue
 
+def check_sol(value):
+    ivalue = int(value)
+    if not ivalue in [0, 10, 20]:
+        raise argparse.ArgumentTypeError("%s must be one of [0,10,20]" % value)
+    return ivalue
+
+
 if __name__== "__main__":
     # Create the parser
     parser = argparse.ArgumentParser()
     # Add an argument
     parser.add_argument('--data', default='ant', type=str, help='Select the dataset to use, ant for ANTICIPATE, cont for CONTINGENCY')
     parser.add_argument('--fix_instance', default=-1, type=check_zero, help='It fixes the instance to optimize only the parameter. if -1 run optimization on all the data')
-    parser.add_argument('--split', default=30, type=check_split, help='Select the GP trained split to use')
+    parser.add_argument('--split', default=100, type=check_split, help='Select the GP trained split to use')
     parser.add_argument('--max_time', default=0, type=check_zero, help='Time constraint for single function call, pass 0 to not use constraint')
     parser.add_argument('--max_mem', default=0, type=check_zero, help='Memory constraint for single function call, pass 0 to not use constraint')
+    parser.add_argument('--sol_q', default=0, type=check_sol, help='The solution quality expressed as percentage improvement over base solution, 0 for no constraint')
     parser.add_argument('--cum_time', default=0, type=check_zero, help='Cumulative time constraint for function calls, pass 0 to not use constraint')
     parser.add_argument('--cum_mem', default=0, type=check_zero, help='Cumulative memory constraint for function calls, pass 0 to not use constraint')
     parser.add_argument('--batch_size', default=1, type=check_one)
@@ -131,9 +139,11 @@ if __name__== "__main__":
     parser.add_argument('--load_gp', action='store_true', help='Load pre-trained GPs, the GP is trained on 100 minus the split passed as argument (percentage of the dataset)')
     parser.add_argument('--freeze_gp', action='store_true', help='Freeze the GPs and do not perform training during the algorithm')
     parser.add_argument('--transform', action='store_true', help='Use the GPs fitted with transformations on the observations')
+    parser.add_argument('--csv', action='store_true', help='Add results to csv')
     # Parse the argument
     args = parser.parse_args()
 
+    # PATHS
     base_path = "dataset_splits/"
 
     if(args.data == 'ant'):
@@ -151,8 +161,9 @@ if __name__== "__main__":
     obj_name = 'objective_state_raw.pth'
     transf = 'raw'
 
-    cs=[args.max_time, args.max_mem]
+    cs=[args.max_time, args.max_mem] # constraints bounds
 
+    # Load Pre-trained GPs
     gp_dict=None
     if args.load_gp:
         if args.transform: # use transformations on observed values
@@ -168,12 +179,22 @@ if __name__== "__main__":
             else:
                 name = 'cons_{}_state_{}_t{}_m{}.pth'.format(i, transf,cs[0], cs[1])
             gp_dict['cons_{}'.format(i)] = torch.load(base_path+dataset_name+dir_name+name)
+
+    if args.csv: # create csv for results
+        try:
+            out_df = pd.read_csv(base_path+dataset_name+dir_name+'t2_{}.csv'.format(transf))
+        except:
+            out_df = pd.DataFrame(columns=['instance', 'Time bound (s)', 'Sol improvement', par_name, 'memAvg(MB)'])
  
+    # Fixed Instance
     if args.fix_instance == -1:
         df = pd.read_csv('datasets/'+df_name) # always run the algorithm on the full dataset
+        base_sol = df.loc[df[par_name]==1].loc[:, ['sol(keuro)']].max().values
         f = dataF(df, par_name, 99)
-    else:
+    else: # run on all instances
         df = pd.read_csv('datasets/'+df_name) # always run the algorithm on the full dataset
+        # baseline solution, minimum resources
+        base_sol = df.loc[df[par_name]==1].loc[df['instance']==args.fix_instance].loc[:, ['sol(keuro)']].values
         df = df.loc[df['instance']==args.fix_instance]
         f = dataFix(df, par_name, args.fix_instance)
 
@@ -228,9 +249,10 @@ if __name__== "__main__":
     turbo.optimize()
 
     X = turbo.X.astype(int)  # Evaluated points
-    fX = turbo.fX.astype(int)  # Observed values
-    cX = turbo.cX.astype(int)  # Observed resources
+    fX = turbo.fX.astype(float)  # Observed values
+    cX = turbo.cX.astype(float)  # Observed resources
     cs = [] # constraints
+    
     for i in [args.max_time, args.max_mem]:
         if i==0: # the constraint is not used
             cs.append(np.inf) 
@@ -242,22 +264,48 @@ if __name__== "__main__":
     for e in satisfactions:
         cum_and = np.logical_and(cum_and, e)
 
-    try:
-        subset_idx = np.argmin(fX[cum_and])
-        ind_best = np.arange(fX.size)[cum_and.ravel()][subset_idx]
+    # improve solution of desired percentage
+    if args.sol_q != 0:
+        sol_improvement = (fX <= (base_sol - (args.sol_q*base_sol/100))).ravel()
+        cum_and = np.logical_and(cum_and, sol_improvement)
 
-        f_best, x_best, c_best = fX[ind_best], X[ind_best, :], cX[ind_best, :]
+        try:
+            subset_idx = np.argmin(fX[cum_and])
+            ind_best = np.arange(fX.size)[cum_and.ravel()][subset_idx]
 
-        print("Best feasible value found:\n\tf(x) = %.3f\nObserved at:\n\t %s = %s\nWith time: %d seconds, and memory: %d Mb" % (f_best, par_name,np.around(x_best, 3), c_best[0], c_best[1]))
-        print("with total time: %d seconds, and total memory: %d Mb" % (turbo.currTime, turbo.currMem))
-    except:
-        total_violations = -(constraints_violation(cX, cs))
-        mask = np.isfinite(fX)
+            f_best, x_best, c_best = fX[ind_best], X[ind_best, :], cX[ind_best, :]
 
-        subset_idx = np.argmin(total_violations[mask])
-        ind_best = np.arange(fX.size)[mask.ravel()][subset_idx]
+            print("Best feasible value found:\n\tf(x) = %.3f\nObserved at:\n\t %s = %s\nWith time: %d seconds, and memory: %d Mb" % (f_best, par_name, x_best[0], c_best[0], c_best[1]))
+            print("Base solution: %.3f - improvement needed %d%%" % (base_sol, args.sol_q))
+            print("with total time: %d seconds, and total memory: %d Mb" % (turbo.currTime, turbo.currMem))
+        except:
+            total_violations = -(constraints_violation(cX, cs))
+            mask = np.isfinite(fX)
 
-        f_best, x_best, c_best = fX[ind_best], X[ind_best, :], cX[ind_best, :]
+            subset_idx = np.argmin(total_violations[mask])
+            ind_best = np.arange(fX.size)[mask.ravel()][subset_idx]
 
-        print("Best value found:\n\tf(x) = %.3f\nObserved at:\n\t %s = %s\nWith time: %d seconds, and memory: %d Mb" % (f_best, par_name, np.around(x_best, 3), c_best[0], c_best[1]))
-        print("The value is not feasible, but it is the one with minimum total violations with %d evals" % (args.max_evals))
+            f_best, x_best, c_best = fX[ind_best], X[ind_best, :], cX[ind_best, :]
+
+            print("Best value found:\n\tf(x) = %.3f\nObserved at:\n\t %s = %s\nWith time: %d seconds, and memory: %d Mb" % (f_best, par_name, x_best[0], c_best[0], c_best[1]))
+            print("Base solution: %.3f - improvement needed %d%%" % (base_sol, args.sol_q))
+            print("The value is NOT feasible, but it is the one with minimum total violations with %d evals" % (args.max_evals))
+            x_best[0] = '-1'
+    else:
+        f_best, x_best, c_best = base_sol, [1], [0,60.12]
+
+        print("Baseline solution:\n\tf(x) = %.3f\nObserved at:\n\t %s = %s\nWith memory: %d Mb" % (f_best, par_name, x_best[0], c_best[1]))
+
+    insert_row = {
+        'instance': args.fix_instance, 
+        'Time bound (s)': cs[0], 
+        'Sol improvement': args.sol_q, 
+        par_name : x_best[0], 
+        'memAvg(MB)': c_best[1]
+    }
+    
+    if args.csv: # create csv for results
+        out_df = pd.concat([out_df, pd.DataFrame([insert_row])])
+        print('Saving to '+base_path+dataset_name+dir_name+'t2_{}.csv'.format(transf))
+        print(insert_row)
+        out_df.to_csv(base_path+dataset_name+dir_name+'t2_{}.csv'.format(transf), index=False)

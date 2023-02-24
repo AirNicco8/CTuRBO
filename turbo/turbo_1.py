@@ -213,7 +213,7 @@ class Turbo1:
         return np.sum(tmp, axis=2).T
 
     def _get_best_feasible(self, cX, fX):
-        satisfactions = [cX[:,i] < self.cs[i] for i in self.cs_range]
+        satisfactions = [(cX[:,i] - self.cs[i] <= 0) for i in self.cs_range]
         cum_and = np.isfinite(fX).ravel()
         for e in satisfactions:
             cum_and = np.logical_and(cum_and, e)
