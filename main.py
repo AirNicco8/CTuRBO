@@ -180,21 +180,25 @@ if __name__== "__main__":
                 name = 'cons_{}_state_{}_t{}_m{}.pth'.format(i, transf,cs[0], cs[1])
             gp_dict['cons_{}'.format(i)] = torch.load(base_path+dataset_name+dir_name+name)
 
+    frs = 'freezed' if args.freeze_gp else 'unfreezed'
+    csv_name = 't2_{}_{}.csv'.format(frs, transf)
+
     if args.csv: # create csv for results
         try:
-            out_df = pd.read_csv(base_path+dataset_name+dir_name+'t2_{}.csv'.format(transf))
+            out_df = pd.read_csv(base_path+dataset_name+dir_name+csv_name)
+            print('Loading csv: '+base_path+dataset_name+dir_name+csv_name)
         except:
-            out_df = pd.DataFrame(columns=['instance', 'Time bound (s)', 'Sol improvement', par_name, 'memAvg(MB)'])
+            out_df = pd.DataFrame(columns=['instance', 'Time bound (s)', 'Sol improvement', par_name, 'memAvg(MB)', 'baseline sol(keuro)', 'sol(keuro)'])
  
     # Fixed Instance
     if args.fix_instance == -1:
         df = pd.read_csv('datasets/'+df_name) # always run the algorithm on the full dataset
-        base_sol = df.loc[df[par_name]==1].loc[:, ['sol(keuro)']].max().values
+        base_sol = df.loc[df[par_name]==1].loc[:, ['sol(keuro)']].max().values[0][0]
         f = dataF(df, par_name, 99)
     else: # run on all instances
         df = pd.read_csv('datasets/'+df_name) # always run the algorithm on the full dataset
         # baseline solution, minimum resources
-        base_sol = df.loc[df[par_name]==1].loc[df['instance']==args.fix_instance].loc[:, ['sol(keuro)']].values
+        base_sol = df.loc[df[par_name]==1].loc[df['instance']==args.fix_instance].loc[:, ['sol(keuro)']].values[0][0]
         df = df.loc[df['instance']==args.fix_instance]
         f = dataFix(df, par_name, args.fix_instance)
 
@@ -273,7 +277,7 @@ if __name__== "__main__":
             subset_idx = np.argmin(fX[cum_and])
             ind_best = np.arange(fX.size)[cum_and.ravel()][subset_idx]
 
-            f_best, x_best, c_best = fX[ind_best], X[ind_best, :], cX[ind_best, :]
+            f_best, x_best, c_best = fX[ind_best][0], X[ind_best, :], cX[ind_best, :]
 
             print("Best feasible value found:\n\tf(x) = %.3f\nObserved at:\n\t %s = %s\nWith time: %d seconds, and memory: %d Mb" % (f_best, par_name, x_best[0], c_best[0], c_best[1]))
             print("Base solution: %.3f - improvement needed %d%%" % (base_sol, args.sol_q))
@@ -285,12 +289,13 @@ if __name__== "__main__":
             subset_idx = np.argmin(total_violations[mask])
             ind_best = np.arange(fX.size)[mask.ravel()][subset_idx]
 
-            f_best, x_best, c_best = fX[ind_best], X[ind_best, :], cX[ind_best, :]
+            f_best, x_best, c_best = fX[ind_best][0], X[ind_best, :], cX[ind_best, :]
 
             print("Best value found:\n\tf(x) = %.3f\nObserved at:\n\t %s = %s\nWith time: %d seconds, and memory: %d Mb" % (f_best, par_name, x_best[0], c_best[0], c_best[1]))
             print("Base solution: %.3f - improvement needed %d%%" % (base_sol, args.sol_q))
             print("The value is NOT feasible, but it is the one with minimum total violations with %d evals" % (args.max_evals))
             x_best[0] = '-1'
+            f_best = -1
     else:
         f_best, x_best, c_best = base_sol, [1], [0,60.12]
 
@@ -301,11 +306,13 @@ if __name__== "__main__":
         'Time bound (s)': cs[0], 
         'Sol improvement': args.sol_q, 
         par_name : x_best[0], 
-        'memAvg(MB)': c_best[1]
+        'memAvg(MB)': c_best[1],
+        'baseline sol(keuro)': base_sol, 
+        'sol(keuro)': f_best
     }
     
     if args.csv: # create csv for results
         out_df = pd.concat([out_df, pd.DataFrame([insert_row])])
-        print('Saving to '+base_path+dataset_name+dir_name+'t2_{}.csv'.format(transf))
+        print('Saving to '+base_path+dataset_name+dir_name+csv_name)
         print(insert_row)
-        out_df.to_csv(base_path+dataset_name+dir_name+'t2_{}.csv'.format(transf), index=False)
+        out_df.to_csv(base_path+dataset_name+dir_name+csv_name, index=False)

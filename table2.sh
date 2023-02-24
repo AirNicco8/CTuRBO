@@ -20,7 +20,6 @@ for Y in $t_bounds #time bound
                             python3 main.py --data $1 --fix_instance $Z --max_time $Y --max_mem 180 --sol_q $X --trust_regions 2 --max_evals 150 --load_gp --freeze_gp --split $2 --csv
                         fi
                     done
-                    exit
            done
     done
 

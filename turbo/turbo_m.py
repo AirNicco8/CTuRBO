@@ -258,7 +258,7 @@ class TurboM(Turbo1):
 
                     # if self.verbose and fX_i.min() < self.fX.min() - 1e-3 * math.fabs(self.fX.min()):
                     #     n_evals, fbest = self.n_evals, fX_i.min()
-                    if self.verbose and nextbest < fbest - 1e-3 * math.fabs(fbest):
+                    if self.verbose and (nextbest < fbest):
                         n_evals, fbest = self.n_evals, nextbest
                         print(f"{n_evals}) New feasible best @ TR-{i}: {fbest:.4}")
                         sys.stdout.flush()
