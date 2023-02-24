@@ -11,11 +11,16 @@ This repo employs the TuRBO code for the UniBo AITI exam project, which entails 
 ## Usage
 **Disclaimer**: this is an alpha version which uses the data from the csv dataset and does not actually computes the function which should be optimized
 
-The script `main.py` launches the TuRBO algorithm on Anticipate dataset, to set the time and memory constraints they can be passed as arguments from the terminal as in this example:
+Additional files are needed for using pre-trained GPs on different data splits:
+https://drive.google.com/drive/folders/1EmZI_sUcJigxTJKhmiz4nYyMEtki1BKo?usp=sharing
+
+In particular the folder *dataset_splits*.
+
+The script `main.py` launches the TuRBO algorithm on Anticipate or Contingency dataset, the time, solution quality and/or memory constraints they can be passed as arguments from the terminal as in this example:
    ```shell
    python main.py --max_time 150 --max_mem 200 --trust_regions 2
    ```
- The time is intended in seconds, the memory is intended in Mega Bytes. There is also the possibility to choose the number of trust regions mantained by TuRBO. For other arguments customization run:
+ The time is intended in seconds, the memory is intended in Mega Bytes. There is also the possibility to choose the number of trust regions mantained by TuRBO and run the algorithm with GPs pretrained on dataset splits (freezed or not). For other arguments customization run:
    ```shell
    python main.py -h
    ```
