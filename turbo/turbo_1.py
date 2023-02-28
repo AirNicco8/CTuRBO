@@ -19,7 +19,7 @@ import torch
 from torch.quasirandom import SobolEngine
 
 from .gp import train_gp
-from .utils import from_unit_cube, latin_hypercube, to_unit_cube, gaussian_copula
+from .utils import from_unit_cube, latin_hypercube, to_unit_cube, gaussian_copula, bilog
 
 
 class Turbo1:
@@ -176,16 +176,16 @@ class Turbo1:
     def _cum_constraints_check(self):
         return (self.currTime < self.tcs[0] and self.currMem < self.tcs[1])
 
-    def _constraints_violation(self, estimates):
-        tmp = np.zeros(estimates.shape[0])
+    # def _constraints_violation(self, estimates):
+    #     tmp = np.zeros(estimates.shape[0])
         
-        for i in self.cs_range:
-            violations = self.cs[i] - estimates[:,i]
-            violations[violations > 0] = 0.0
+    #     for i in self.cs_range:
+    #         violations = self.cs[i] - estimates[:,i]
+    #         violations[violations > 0] = 0.0
             
-            tmp = np.vstack((tmp, violations))
+    #         tmp = np.vstack((tmp, violations))
 
-        return np.sum(tmp, axis=0)
+    #     return np.sum(tmp, axis=0)
 
     def _add_resources(self, v):
         for el in v:
@@ -264,10 +264,7 @@ class Turbo1:
         fX = (deepcopy(fX) - mu) / sigma
 
         if self.transform_flag:
-            for i in self.cs_range:
-                k = self.cs[i]
-                if k == np.inf: k = 0
-                cX[:,i] = np.sign(cX[:,i] - k) * np.log(1 + np.absolute(cX[:,i] - k)) + k
+            cX = bilog(cX)
             fX = gaussian_copula(fX)
 
         # Standardize constraints (?) values.

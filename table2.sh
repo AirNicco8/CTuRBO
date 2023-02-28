@@ -22,5 +22,3 @@ for Y in $t_bounds #time bound
                     done
            done
     done
-
-

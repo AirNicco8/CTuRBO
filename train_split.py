@@ -1,16 +1,15 @@
 
 from turbo.gp import train_gp
-from turbo.utils import gaussian_copula
+from turbo.utils import gaussian_copula, bilog
 
 import gpytorch
-import numpy as np
 import torch
 import pandas as pd
+import time
 
 import argparse
 import warnings
 warnings.filterwarnings("ignore")
-from scipy.stats import norm
 
 
 def check_split(value):
@@ -31,14 +30,12 @@ parser.add_argument('--data', default='ant', type=str)
 parser.add_argument('--test_split', default=30, type=check_split)
 parser.add_argument('--steps', default=50, type=int)    
 parser.add_argument('--transform', action='store_true', help='Use the transformations on the observations')
-parser.add_argument('--max_time', default=0, type=check_zero, help='Time constraint for single function call, pass 0 to not use constraint')
-parser.add_argument('--max_mem', default=0, type=check_zero, help='Memory constraint for single function call, pass 0 to not use constraint')
 
 # Parse the argument
 args = parser.parse_args()
 ts = args.test_split
 
-base_path = "dataset_splits/"
+base_path = "dataset_splits_rand/"
 
 if args.data == 'ant':
     dataset_name = 'ant/'
@@ -60,7 +57,6 @@ device, dtype = torch.device("cpu"), torch.float64
 use_ard=True
 n_training_steps = args.steps
 n_constraints = 2
-cs = [args.max_time, args.max_mem]
 
 X = df[[par_name, 'instance']].values
 fX = df[['sol(keuro)']].values.ravel()
@@ -68,15 +64,17 @@ cX = df[['time(sec)','memAvg(MB)']].values
 obj_name = 'objective_state_raw.pth'
 transf = 'raw'
 
+
 if args.transform:
-    for i in range(cX.shape[1]):
-        k = cs[i]
-        cX[:,i] = np.sign(cX[:,i] - k) * np.log(1 + np.absolute(cX[:,i] - k)) + k
+    cX = bilog(cX)
     fX = gaussian_copula(fX)
 
-    obj_name = 'objective_state_transformed_t{}_m{}.pth'.format(cs[0], cs[1])
+    obj_name = 'objective_state_transformed.pth'
     transf = 'transformed'
 
+print(transf)
+
+init = time.time()
 with gpytorch.settings.max_cholesky_size(max_cholesky_size):
     X_torch = torch.tensor(X).to(device=device, dtype=dtype)
     y_torch = torch.tensor(fX).to(device=device, dtype=dtype).ravel()
@@ -86,7 +84,8 @@ with gpytorch.settings.max_cholesky_size(max_cholesky_size):
 
     # Save state dict
     torch.save(gp.state_dict(), base_path+dataset_name+dir_name+obj_name)
-
+curt = time.time() - init
+print("Objective: --- %s seconds ---" % (curt))
 # GPs for constraints
 cgps = [0]*n_constraints
 
@@ -98,4 +97,7 @@ for i in range(n_constraints):
         )
 
         # Save state dict
-        torch.save(cgps[i].state_dict(), base_path+dataset_name+dir_name+'cons_{}_state_{}_t{}_m{}.pth'.format(i, transf, cs[0], cs[1]))
+        torch.save(cgps[i].state_dict(), base_path+dataset_name+dir_name+'cons_{}_state_{}.pth'.format(i, transf))
+        curt = time.time() - init
+        print("%d Constraint--- %s seconds ---" % (i, curt))
+

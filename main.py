@@ -1,11 +1,8 @@
 from turbo import Turbo1, TurboM
+from turbo.utils import bilog
 import numpy as np
 import pandas as pd
-import re
 import torch
-import math
-import matplotlib
-import matplotlib.pyplot as plt
 import argparse
 
 import warnings
@@ -136,6 +133,7 @@ if __name__== "__main__":
     parser.add_argument('--max_evals', default=200, type=check_zero)
     parser.add_argument('--n_init', default=20, type=check_one)
     parser.add_argument('--trust_regions', default=5, type=check_one)
+    parser.add_argument('--rand', action='store_true', help='Use randomized splits')
     parser.add_argument('--load_gp', action='store_true', help='Load pre-trained GPs, the GP is trained on 100 minus the split passed as argument (percentage of the dataset)')
     parser.add_argument('--freeze_gp', action='store_true', help='Freeze the GPs and do not perform training during the algorithm')
     parser.add_argument('--transform', action='store_true', help='Use the GPs fitted with transformations on the observations')
@@ -144,7 +142,9 @@ if __name__== "__main__":
     args = parser.parse_args()
 
     # PATHS
-    base_path = "dataset_splits/"
+    base_path = "dataset_splits"
+    if args.rand:
+        base_path = "dataset_splits_rand/"
 
     if(args.data == 'ant'):
         dataset_name = 'ant/'
@@ -167,17 +167,15 @@ if __name__== "__main__":
     gp_dict=None
     if args.load_gp:
         if args.transform: # use transformations on observed values
-                obj_name = 'objective_state_transformed_t{}_m{}.pth'.format(cs[0], cs[1])
+                obj_name = 'objective_state_transformed.pth'
                 transf = 'transformed'
+                cs = list(map(bilog, cs)) # transformed constraints bounds
 
         print('Loading {} trained GPs - path: {}'.format(transf, base_path+dataset_name+dir_name))
         gp_dict={}
         gp_dict['obj'] = torch.load(base_path+dataset_name+dir_name+obj_name)
         for i in range(2):
-            if not args.transform:
-                name = 'cons_{}_state_{}.pth'.format(i, transf)
-            else:
-                name = 'cons_{}_state_{}_t{}_m{}.pth'.format(i, transf,cs[0], cs[1])
+            name = 'cons_{}_state_{}.pth'.format(i, transf) 
             gp_dict['cons_{}'.format(i)] = torch.load(base_path+dataset_name+dir_name+name)
 
     frs = 'freezed' if args.freeze_gp else 'unfreezed'
@@ -255,15 +253,15 @@ if __name__== "__main__":
     X = turbo.X.astype(int)  # Evaluated points
     fX = turbo.fX.astype(float)  # Observed values
     cX = turbo.cX.astype(float)  # Observed resources
-    cs = [] # constraints
+    csf = [] # constraints
     
-    for i in [args.max_time, args.max_mem]:
+    for i in cs:
         if i==0: # the constraint is not used
-            cs.append(np.inf) 
+            csf.append(np.inf) 
         else:
-            cs.append(i)
+            csf.append(i)
 
-    satisfactions = [cX[:,i] < cs[i] for i in range(len(cs))]
+    satisfactions = [cX[:,i] <= csf[i] for i in range(len(csf))]
     cum_and = np.isfinite(fX).ravel()
     for e in satisfactions:
         cum_and = np.logical_and(cum_and, e)
@@ -283,7 +281,7 @@ if __name__== "__main__":
             print("Base solution: %.3f - improvement needed %d%%" % (base_sol, args.sol_q))
             print("with total time: %d seconds, and total memory: %d Mb" % (turbo.currTime, turbo.currMem))
         except:
-            total_violations = -(constraints_violation(cX, cs))
+            total_violations = -(constraints_violation(cX, csf))
             mask = np.isfinite(fX)
 
             subset_idx = np.argmin(total_violations[mask])
@@ -303,7 +301,7 @@ if __name__== "__main__":
 
     insert_row = {
         'instance': args.fix_instance, 
-        'Time bound (s)': cs[0], 
+        'Time bound (s)': csf[0], 
         'Sol improvement': args.sol_q, 
         par_name : x_best[0], 
         'memAvg(MB)': c_best[1],

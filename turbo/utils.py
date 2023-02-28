@@ -26,6 +26,9 @@ def gaussian_copula(fX):
     
     return ret
 
+def bilog(cX):
+    return np.sign(cX) * np.log(1 + np.absolute(cX))
+
 def to_unit_cube(x, lb, ub):
     """Project to [0, 1]^d from hypercube with bounds lb and ub"""
     assert np.all(lb < ub) and lb.ndim == 1 and ub.ndim == 1 and x.ndim == 2

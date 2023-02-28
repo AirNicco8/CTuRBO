@@ -148,7 +148,7 @@ class TurboM(Turbo1):
             cs_cand = c_cand[:,:,k,:] # select the couple of constraints realization from the batch
             assert cs_cand.shape[0] == y_cand.shape[0]
 
-            satisfactions = [cs_cand[:,:,i]<self.cs[i] for i in self.cs_range]
+            satisfactions = [cs_cand[:,:,i]<=self.cs[i] for i in self.cs_range]
             cum_and = np.isfinite(y_cand[:, :, k])
             for e in satisfactions:
                 cum_and = np.logical_and(cum_and, e)
